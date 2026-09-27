@@ -1,0 +1,152 @@
+{
+  "project_name": "Familien-App PWA",
+  "language": "de",
+  "theme": "dark",
+  "design_archetype": "High-Density Modern Dark (Obsidian & Vivid Accents)",
+  "color_palette": {
+    "background": "#0B0F17",
+    "surface": "#161E2E",
+    "surface_elevated": "#1E293B",
+    "border": "rgba(255, 255, 255, 0.08)",
+    "border_active": "rgba(245, 158, 11, 0.4)",
+    "primary": "#F59E0B",
+    "primary_hover": "#D97706",
+    "secondary": "#10B981",
+    "accent_indigo": "#6366F1",
+    "accent_rose": "#F43F5E",
+    "accent_cyan": "#06B6D4",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#94A3B8",
+    "text_muted": "#64748B",
+    "user_profile_colors": [
+      { "name": "Bernstein Gelb", "hex": "#F59E0B" },
+      { "name": "Smaragd Grün", "hex": "#10B981" },
+      { "name": "Saphir Blau", "hex": "#3B82F6" },
+      { "name": "Amethyst Violett", "hex": "#8B5CF6" },
+      { "name": "Rubin Rot", "hex": "#F43F5E" },
+      { "name": "Türkis Ozean", "hex": "#06B6D4" }
+    ]
+  },
+  "typography": {
+    "heading_font": "'Outfit', 'Manrope', sans-serif",
+    "body_font": "'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+    "mono_font": "'JetBrains Mono', monospace",
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-slate-50",
+      "h2": "text-xl sm:text-2xl lg:text-3xl font-semibold tracking-tight text-slate-100",
+      "h3": "text-lg sm:text-xl font-medium text-slate-200",
+      "body": "text-sm sm:text-base leading-relaxed text-slate-300",
+      "small": "text-xs text-slate-400 font-medium uppercase tracking-wider"
+    }
+  },
+  "navigation": {
+    "type": "Dual Navigation (Top Hamburger Dropdown + Mobile Bottom Bar)",
+    "top_bar": {
+      "style": "bg-slate-900/80 backdrop-blur-xl border-b border-white/10 sticky top-0 z-50 px-4 py-3 flex items-center justify-between",
+      "hamburger_menu": "Dropdown panel with rich glassmorphism backdrop-blur-2xl bg-slate-900/95 border border-white/10 shadow-2xl rounded-2xl p-4 right-4 top-14 w-64 z-50"
+    },
+    "bottom_bar": {
+      "style": "fixed bottom-0 left-0 right-0 z-50 bg-slate-900/90 backdrop-blur-xl border-t border-white/10 px-3 py-2 flex justify-around items-center md:hidden",
+      "item_active": "text-amber-400 flex flex-col items-center gap-1 text-xs font-medium scale-105 transition-all",
+      "item_inactive": "text-slate-400 hover:text-slate-200 flex flex-col items-center gap-1 text-xs transition-colors"
+    }
+  },
+  "key_features_guidelines": {
+    "login_screen": {
+      "components": [
+        "Username + Password form inputs",
+        "WebAuthn Fingerprint Login button (Fingerabdruck-Login) with animated glowing ring",
+        "Password toggle preview",
+        "PWA Installation hint badge"
+      ],
+      "german_labels": {
+        "title": "Familien-App Anmelden",
+        "username": "Benutzername",
+        "password": "Passwort",
+        "submit": "Anmelden",
+        "webauthn": "Mit Fingerabdruck anmelden (WebAuthn)",
+        "demo_hint": "Demodaten: Admin / admin oder Mama / mama"
+      }
+    },
+    "dashboard": {
+      "hero_section": "Weekly Meal Plan Overview (Essensplan Vorschau) pinned at the top with quick day navigation and lunch/dinner summary",
+      "bento_tiles": [
+        { "id": "meal_plan", "title": "Essensplan", "badge": "Aktuelle Woche", "icon": "Utensils" },
+        { "id": "shopping_list", "title": "Einkaufsliste", "badge": "Schnell-Tippen", "icon": "ShoppingBag" },
+        { "id": "calendar", "title": "Kalender", "badge": "Termine & Geburtstage", "icon": "Calendar" },
+        { "id": "notebook", "title": "Notizbuch", "badge": "Notizen", "icon": "BookOpen" },
+        { "id": "whiteboard", "title": "Whiteboard", "badge": "Zeichnen in Profilfarbe", "icon": "Edit3" },
+        { "id": "chores", "title": "Haushaltsplan", "badge": "Aufgaben", "icon": "CheckSquare" },
+        { "id": "postcards", "title": "Postkarten-Karte", "badge": "Erinnerungen", "icon": "MapPin" },
+        { "id": "profile", "title": "Profil & Stiftfarbe", "badge": "Einstellungen", "icon": "User" },
+        { "id": "admin", "title": "Admin-Bereich", "badge": "Verwaltung", "icon": "ShieldCheck" }
+      ]
+    },
+    "meal_plan_essensplan": {
+      "tabs": ["Aktuelle Woche", "Nächste Woche"],
+      "features": [
+        "Mon-Fri pre-filled lunch 'Arbeit' (editable)",
+        "Weekend & Holiday free choice",
+        "Person toggle (1 Person / 2 Personen) that dynamically scales ingredient quantities",
+        "Inline dish editing & deletion",
+        "Dish management catalog",
+        "Button: 'Zutaten in Einkaufsliste übertragen' (Transfer ingredients to shopping list in one click)"
+      ]
+    },
+    "shopping_list_einkaufsliste": {
+      "features": [
+        "Category grouped list (Obst & Gemüse, Milchprodukte, Fleisch & Fisch, Vorrat, Backwaren, Getränke, Haushalt, Tiefkühl, Süßwaren, Hygiene, Sonstiges)",
+        "Bring-style top 20 most used product tiles for 1-click add",
+        "Green highlight tag for items already in list",
+        "Quick text entry + category picker",
+        "Check off & instant clear completed items"
+      ]
+    },
+    "calendar_kalender": {
+      "features": [
+        "Month grid view with previous/next month navigation",
+        "User appointments highlighted in user's profile color",
+        "Birthdays category repeating yearly with special cake icon",
+        "Push notification selector for appointments (3h / 12h / 24h / 72h vorher)",
+        "Month summary list under grid"
+      ]
+    },
+    "profile_profil": {
+      "features": [
+        "Avatar selection / upload preview",
+        "Personal data fields",
+        "Profile Color Picker (Profilfarbe / Stiftfarbe) which drives whiteboard drawing & calendar events",
+        "Push notification toggle switches"
+      ]
+    },
+    "admin_panel": {
+      "features": [
+        "User table (erstellen, löschen, Passwort zurücksetzen, Profil bearbeiten)",
+        "JSON Data Export (Daten exportieren)",
+        "JSON Data Import (Daten importieren)",
+        "Data Reset (System zurücksetzen)"
+      ]
+    }
+  },
+  "image_urls": {
+    "food_dish_sample_1": "https://images.unsplash.com/photo-1627662166825-a860471632e4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxmYW1pbHklMjBhdmF0YXJzJTIwZGFyayUyMHRoZW1lJTIwZm9vZCUyMG1lYWwlMjBwbGFufGVufDB8fHx8MTc5MDUyMDc2OHww&ixlib=rb-4.1.0&q=85",
+    "food_dish_sample_2": "https://images.unsplash.com/photo-1611315764615-3e788573f31e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHw0fHxmYW1pbHklMjBhdmF0YXJzJTIwZGFyayUyMHRoZW1lJTIwZm9vZCUyMG1lYWwlMjBwbGFufGVufDB8fHx8MTc5MDUyMDc2OHww&ixlib=rb-4.1.0&q=85",
+    "food_dish_sample_3": "https://images.unsplash.com/photo-1606258868842-79eb9eff76af?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwyfHxmYW1pbHklMjBhdmF0YXJzJTIwZGFyayUyMHRoZW1lJTIwZm9vZCUyMG1lYWwlMjBwbGFufGVufDB8fHx8MTc5MDUyMDc2OHww&ixlib=rb-4.1.0&q=85"
+  },
+  "instructions_to_main_agent": [
+    "Ensure ALL UI text is entirely in natural German (German language App).",
+    "Ensure dark mode is the default and only primary aesthetic with rich obsidian backgrounds (#0B0F17) and subtle border styling.",
+    "Always apply data-testid on all interactive components (buttons, inputs, menu items, toggles, cards).",
+    "Use lucide-react icons exclusively for crisp iconography.",
+    "Implement WebAuthn fingerprint login as a functional demo flow that validates user authentication seamlessly.",
+    "Integrate profile color everywhere user data appears (Calendar appointment badges, Whiteboard pen color, Avatar rings).",
+    "Ensure the application behaves as a fully installable PWA with service worker registration and dark theme manifest settings."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do NOT center align the entire app container or rely on plain generic layouts.",
+    "Avoid universal CSS transitions like transition: all which disrupt transform animations.",
+    "Every key interaction must feature tactile feedback: micro-animations, hover states, and smooth glassmorphism popovers.",
+    "Provide clear data-testid attributes using kebab-case across all buttons, inputs, modals, and lists.",
+    "Use sonner for user feedback toasts in German (e.g., 'Gericht hinzugefügt', 'Einkaufsliste aktualisiert', 'Daten exportiert')."
+  ]
+}
