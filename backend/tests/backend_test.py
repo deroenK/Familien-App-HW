@@ -348,3 +348,128 @@ class TestAdminData:
         # shopping should be empty
         items = requests.get(f"{API}/shopping", headers=h(admin_token), timeout=15).json()
         assert items == []
+
+
+# ---------- chores (Haushaltsplan)
+class TestChores:
+    def test_chore_crud_and_toggle(self, admin_token):
+        # add week chore
+        r = requests.post(f"{API}/chores", headers=h(admin_token),
+                         json={"title": "TEST_Putzen", "period": "week"}, timeout=15)
+        assert r.status_code == 200
+        cid = r.json()["id"]
+        assert r.json()["done"] is False
+        # list week
+        items = requests.get(f"{API}/chores?period=week", headers=h(admin_token), timeout=15).json()
+        assert any(c["id"] == cid for c in items)
+        # toggle done -> should record done_by
+        r = requests.put(f"{API}/chores/{cid}/toggle", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        j = r.json()
+        assert j["done"] is True
+        assert j["done_by"]  # name recorded
+        # toggle again -> undone
+        r = requests.put(f"{API}/chores/{cid}/toggle", headers=h(admin_token), timeout=15)
+        assert r.json()["done"] is False
+        # month period is separate
+        r = requests.post(f"{API}/chores", headers=h(admin_token),
+                         json={"title": "TEST_Fenster", "period": "month"}, timeout=15)
+        mid = r.json()["id"]
+        week_items = requests.get(f"{API}/chores?period=week", headers=h(admin_token), timeout=15).json()
+        month_items = requests.get(f"{API}/chores?period=month", headers=h(admin_token), timeout=15).json()
+        assert not any(c["id"] == mid for c in week_items)
+        assert any(c["id"] == mid for c in month_items)
+        # reset: mark week done then reset
+        requests.put(f"{API}/chores/{cid}/toggle", headers=h(admin_token), timeout=15)
+        r = requests.post(f"{API}/chores/reset?period=week", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        after = requests.get(f"{API}/chores?period=week", headers=h(admin_token), timeout=15).json()
+        for c in after:
+            assert c["done"] is False
+        # cleanup
+        requests.delete(f"{API}/chores/{cid}", headers=h(admin_token), timeout=15)
+        requests.delete(f"{API}/chores/{mid}", headers=h(admin_token), timeout=15)
+
+
+# ---------- whiteboard
+class TestWhiteboard:
+    def test_whiteboard_flow(self, admin_token):
+        # clear all
+        requests.delete(f"{API}/whiteboard", headers=h(admin_token), timeout=15)
+        sid = str(uuid.uuid4())
+        r = requests.post(f"{API}/whiteboard", headers=h(admin_token),
+                         json={"id": sid, "stroke": {"tool": "pen", "points": [[0,0],[10,10]]},
+                               "color": "#F59E0B"}, timeout=15)
+        assert r.status_code == 200
+        strokes = requests.get(f"{API}/whiteboard", headers=h(admin_token), timeout=15).json()
+        assert any(s["id"] == sid for s in strokes)
+        # notify
+        r = requests.post(f"{API}/whiteboard/notify", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # delete one
+        r = requests.delete(f"{API}/whiteboard/{sid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # clear all
+        r = requests.delete(f"{API}/whiteboard", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert requests.get(f"{API}/whiteboard", headers=h(admin_token), timeout=15).json() == []
+
+
+# ---------- notebooks
+class TestNotebooks:
+    def test_notebook_and_pages_access_control(self, admin_token, mama_token):
+        # Admin creates own book (private)
+        r = requests.post(f"{API}/notebooks", headers=h(admin_token),
+                         json={"title": "TEST_AdminBook", "icon": "book"}, timeout=15)
+        assert r.status_code == 200
+        admin_nb = r.json()["id"]
+        # Mama creates a book
+        r = requests.post(f"{API}/notebooks", headers=h(mama_token),
+                         json={"title": "TEST_MamaBook"}, timeout=15)
+        mama_nb = r.json()["id"]
+        # Mama listing: should NOT see admin's private book
+        mama_books = requests.get(f"{API}/notebooks", headers=h(mama_token), timeout=15).json()
+        assert any(b["id"] == mama_nb for b in mama_books)
+        assert not any(b["id"] == admin_nb for b in mama_books)
+        # Admin listing: sees all
+        admin_books = requests.get(f"{API}/notebooks", headers=h(admin_token), timeout=15).json()
+        ids = [b["id"] for b in admin_books]
+        assert admin_nb in ids and mama_nb in ids
+        # Mama PUT on admin book -> 403
+        r = requests.put(f"{API}/notebooks/{admin_nb}", headers=h(mama_token),
+                        json={"title": "hax"}, timeout=15)
+        assert r.status_code == 403
+        # Mama DELETE on admin book -> 403
+        r = requests.delete(f"{API}/notebooks/{admin_nb}", headers=h(mama_token), timeout=15)
+        assert r.status_code == 403
+        # Admin toggles shared on his book
+        r = requests.put(f"{API}/notebooks/{admin_nb}", headers=h(admin_token),
+                        json={"shared": True}, timeout=15)
+        assert r.status_code == 200 and r.json()["shared"] is True
+        # Now Mama can see it
+        mama_books = requests.get(f"{API}/notebooks", headers=h(mama_token), timeout=15).json()
+        assert any(b["id"] == admin_nb for b in mama_books)
+        # add page
+        r = requests.post(f"{API}/notebooks/{admin_nb}/pages", headers=h(admin_token),
+                         json={"title": "Seite 1", "content_html": "<b>Hi</b>"}, timeout=15)
+        assert r.status_code == 200
+        pid = r.json()["id"]
+        pages = requests.get(f"{API}/notebooks/{admin_nb}/pages", headers=h(admin_token), timeout=15).json()
+        assert any(p["id"] == pid for p in pages)
+        # update page
+        r = requests.put(f"{API}/pages/{pid}", headers=h(admin_token),
+                        json={"content_html": "<i>Updated</i>", "canvas_data": "data:image/png;base64,abc"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["content_html"] == "<i>Updated</i>"
+        assert r.json()["canvas_data"].startswith("data:image/png")
+        # book page_count increases
+        books = requests.get(f"{API}/notebooks", headers=h(admin_token), timeout=15).json()
+        this_book = [b for b in books if b["id"] == admin_nb][0]
+        assert this_book["page_count"] >= 1
+        assert this_book["is_owner"] is True
+        # delete page
+        r = requests.delete(f"{API}/pages/{pid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # cleanup books
+        requests.delete(f"{API}/notebooks/{admin_nb}", headers=h(admin_token), timeout=15)
+        requests.delete(f"{API}/notebooks/{mama_nb}", headers=h(mama_token), timeout=15)

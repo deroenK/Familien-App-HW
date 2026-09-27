@@ -23,6 +23,9 @@ Vollständige deutsche Familien-App (PWA) mit Anmeldung (Benutzername+Passwort, 
 - Familienmitglieder (Mama u.a.): planen Essen, Einkauf, Termine
 
 ## Implemented (2026-06)
+- **Haushaltsplan** (2. Iteration): Wochen-/Monatsplan, Fortschrittsbalken + grünes Aufleuchten bei 100%, Erlediger-Name gespeichert/angezeigt, Aufgaben hinzufügen/löschen, Plan zurücksetzen, Push bei Erledigung
+- **Whiteboard** (2. Iteration): Werkzeuge (Stift/Marker/Radierer/Linie/Rechteck/Kreis), Stiftfarbe=Profilfarbe + Farbwähler, Stärke, Undo/Redo (30), Echtzeit-Sync via Polling, PNG-Export, Leeren mit Bestätigung, Familie-Benachrichtigung
+- **Notizbuch** (2. Iteration): mehrere Bücher mit Icon, Seiten in A4, Rich-Text (Fett/Kursiv/Unterstrichen/Listen), Handschrift-Canvas, Tesseract.js OCR (de+en), Teilen pro Buch, Zugriffsschutz (eigene+geteilte; Admin alle; Seiten-Endpunkte 403-geschützt)
 - Login + WebAuthn Fingerabdruck (register/authenticate), Fingerabdruck-Anmeldung auf Login-Seite
 - Profil: Daten, Avatar-Upload (base64), Profilfarbe (=Stiftfarbe), Passwort ändern, Push-Toggles je Typ, Test-Push
 - Admin: User CRUD, Passwort-Reset, Profil+Rolle bearbeiten, JSON Export/Import/Reset

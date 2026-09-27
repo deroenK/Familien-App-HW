@@ -681,7 +681,7 @@ async def _deliver(subs: list, title: str, body: str, url: str) -> int:
 
 
 # ------------------------------------------------------------------ data export/import/reset
-DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events"]
+DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events", "chores", "whiteboard_strokes", "notebooks", "notebook_pages"]
 
 
 @api_router.get("/admin/export")
@@ -706,7 +706,7 @@ async def import_data(payload: Dict[str, Any], admin: dict = Depends(require_adm
 
 @api_router.post("/admin/reset")
 async def reset_data(admin: dict = Depends(require_admin)):
-    for coll in ["dishes", "mealplan_entries", "shopping_items", "product_usage", "events"]:
+    for coll in [c for c in DATA_COLLECTIONS if c != "users"]:
         await db[coll].delete_many({})
     return {"ok": True}
 
@@ -751,9 +751,6 @@ async def shutdown_db_client():
 
 
 # ================= Haushaltsplan / Whiteboard / Notizbuch =================
-DATA_COLLECTIONS = DATA_COLLECTIONS + ["chores", "whiteboard_strokes", "notebooks", "notebook_pages"]
-
-
 def _uname(u):
     return u.get("name") or u["username"]
 
@@ -858,6 +855,15 @@ def _nb_filter(user):
     return {"$or": [{"owner_id": user["id"]}, {"shared": True}]}
 
 
+async def _assert_notebook_access(nid, user):
+    nb = await db.notebooks.find_one({"id": nid})
+    if not nb:
+        raise HTTPException(404, "Nicht gefunden")
+    if user.get("role") == "admin" or nb["owner_id"] == user["id"] or nb.get("shared"):
+        return nb
+    raise HTTPException(403, "Keine Berechtigung")
+
+
 @api_router.get("/notebooks")
 async def list_notebooks(user: dict = Depends(get_current_user)):
     books = await db.notebooks.find(_nb_filter(user), {"_id": 0}).sort("created_at", 1).to_list(1000)
@@ -907,6 +913,7 @@ async def list_pages(nid: str, user: dict = Depends(get_current_user)):
 
 @api_router.post("/notebooks/{nid}/pages")
 async def create_page(nid: str, body: PageBody, user: dict = Depends(get_current_user)):
+    await _assert_notebook_access(nid, user)
     count = await db.notebook_pages.count_documents({"notebook_id": nid})
     doc = {"id": str(uuid.uuid4()), "notebook_id": nid, "title": body.title or f"Seite {count + 1}",
            "content_html": body.content_html or "", "canvas_data": body.canvas_data,
@@ -917,6 +924,10 @@ async def create_page(nid: str, body: PageBody, user: dict = Depends(get_current
 
 @api_router.put("/pages/{pid}")
 async def update_page(pid: str, body: PageBody, user: dict = Depends(get_current_user)):
+    existing = await db.notebook_pages.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Nicht gefunden")
+    await _assert_notebook_access(existing["notebook_id"], user)
     upd = {"updated_at": now_iso()}
     for k in ("title", "content_html", "canvas_data"):
         v = getattr(body, k)
@@ -928,7 +939,10 @@ async def update_page(pid: str, body: PageBody, user: dict = Depends(get_current
 
 @api_router.delete("/pages/{pid}")
 async def delete_page(pid: str, user: dict = Depends(get_current_user)):
-    await db.notebook_pages.delete_one({"id": pid})
+    existing = await db.notebook_pages.find_one({"id": pid})
+    if existing:
+        await _assert_notebook_access(existing["notebook_id"], user)
+        await db.notebook_pages.delete_one({"id": pid})
     return {"ok": True}
 
 

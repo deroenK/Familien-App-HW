@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 2 focused on the 3 new modules (Haushaltsplan, Whiteboard, Notizbuch) plus regression of core flows. Backend pytest: 28/28 pass (added TestChores, TestWhiteboard, TestNotebooks covering CRUD, chore toggle name recording, period isolation, reset, stroke persist/notify/clear, notebook access-control 403 for non-owner PUT/DELETE, shared toggle grants read to others, page CRUD, admin-sees-all, is_owner flag, page_count). Frontend Playwright: dashboard tiles tile-chores/tile-whiteboard/tile-notebook navigate correctly; hamburger dropdown shows 9 items for admin (Dashboard, Essensplan, Einkaufsliste, Kalender, Haushaltsplan, Whiteboard, Notizbuch, Profil, Admin). Chores: add task -> toggle -> 'erledigt von <Name>' rendered, monthly tab isolated (0 items), reset clears completions. Whiteboard: all 13 toolbar data-testids present (tools pen/marker/eraser/line/rect/circle, color-picker, size-slider, undo/redo, export PNG, clear, notify); mouse drag stroke persists via POST /api/whiteboard (GET returned 1), clear-whiteboard empties (GET returned 0). Notebook: create-book prompt creates book, open opens editor, add-page auto-opens page in editor, rich-text editor present with fmt-bold/italic/underline, mode-draw shows handwriting-canvas + ocr-button, save persists (POST /api/pages), back-to-books returns to grid. Cleanup executed via API for TEST_UI_* artefacts.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py grew to ~940 lines mixing auth, WebAuthn, mealplan, shopping, chores, whiteboard, notebooks — split into routers/modules (>700 line threshold)",
+    "DATA_COLLECTIONS is defined twice (line 684 and again at 754 by rebinding) — brittle pattern; second admin/export/reset call still uses the first snapshot because they were declared before the rebind. Impact: chores/whiteboard/notebooks are NOT included in admin export/reset — data loss risk on import and stale export. Recommend a single module-level list initialized once, referenced by handlers.",
+    "chore/whiteboard/notebook endpoints call _send_push blocking inside request handler — should be a background task",
+    "Whiteboard has no per-user auth on delete-single-stroke or clear-all: any authenticated user can wipe the whiteboard (no author check). Consider restricting clear-all to admin or stroke owner.",
+    "Notebook PUT allows setting shared=False silently even when body.shared is explicitly False -> current filter `v is not None` handles it correctly, verified.",
+    "Notebook page endpoints (create/update/delete) do not enforce notebook ownership/shared access — a user with a page id could PUT/DELETE arbitrary pages of other users. Only /notebooks (parent) is gated. Recommend adding _nb_filter check on /notebooks/{nid}/pages POST and /pages/{pid} PUT/DELETE.",
+    "OCR (Tesseract.js) loads language data at runtime from CDN – gracefully handled by button state, but no user feedback if CDN blocked.",
+    "Frontend still lacks brute-force lockout, httpOnly cookies, and password policy noted in iteration_1",
+    "Whiteboard uses polling (as per description) — consider WebSocket for realtime",
+    "reset_data admin endpoint still uses hardcoded list omitting chores/whiteboard_strokes/notebooks/notebook_pages"
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/iteration_2.json"
+  ],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "100% of scripted checks"},
+  "test_credentials": "Admin/admin (admin), Mama/mama (user)",
+  "seed_data_creation": "None persisted - TEST_UI_* books/chores cleaned via API after run",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run backend tests sequentially: python -m pytest backend/tests/backend_test.py -n 0. All 28 tests currently green. HIGHEST-IMPACT code-review finding: admin/export and admin/reset still only cover the initial 6 collections because DATA_COLLECTIONS was mutated AFTER handlers were bound at import time (see server.py lines 684 vs 754). Additionally, /pages/{pid} endpoints lack authorization checks — a security concern worth flagging to E1 but not currently causing test failures."
+}
