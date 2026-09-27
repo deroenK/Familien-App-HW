@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "sonner";
-import { Fingerprint, Eye, EyeOff, Utensils, Loader2 } from "lucide-react";
+import { Fingerprint, Eye, EyeOff, Home, Loader2 } from "lucide-react";
 import { api, API, apiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { serializeAssertion, base64urlToBuffer } from "../lib/webauthn";
@@ -76,7 +76,7 @@ export default function Login() {
       <div className="w-full max-w-md relative animate-fade-up">
         <div className="flex flex-col items-center mb-8">
           <div className="h-16 w-16 rounded-2xl grid place-items-center mb-4 shadow-xl" style={{ background: "linear-gradient(135deg,#F59E0B,#D97706)" }}>
-            <Utensils className="h-8 w-8 text-black" />
+            <Home className="h-8 w-8 text-black" />
           </div>
           <h1 className="font-heading text-3xl font-bold tracking-tight text-slate-50">Familien-App</h1>
           <p className="text-sm text-slate-400 mt-1">Anmelden, um fortzufahren</p>

@@ -1,28 +1,32 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, Cake } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, Cake, CalendarPlus } from "lucide-react";
 import { api, apiError } from "../lib/api";
-import { useAuth } from "../context/AuthContext";
 import { isoDate } from "../lib/dates";
 
 const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 const WD = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
-const NOTIFY = [{ v: "", l: "Keine" }, { v: 3, l: "3h vorher" }, { v: 12, l: "12h vorher" }, { v: 24, l: "24h vorher" }, { v: 72, l: "72h vorher" }];
+const UNITS = [{ v: "minutes", l: "Minuten" }, { v: "hours", l: "Stunden" }, { v: "days", l: "Tage" }];
 
 export default function CalendarPage() {
-  const { user } = useAuth();
   const [cursor, setCursor] = useState(new Date());
   const [events, setEvents] = useState([]);
-  const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [modal, setModal] = useState(false);
 
   const load = useCallback(async () => {
-    const [ev, us] = await Promise.all([api.get("/events"), api.get("/users")]);
-    setEvents(ev.data);
-    setUsers(us.data);
+    const { data } = await api.get("/events");
+    setEvents(data);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const subscribe = async () => {
+    const { data } = await api.get("/calendar/feed");
+    const url = `${process.env.REACT_APP_BACKEND_URL}${data.path}`;
+    try { await navigator.clipboard.writeText(url); } catch {}
+    window.prompt("Diesen Link in Apple/Google Kalender als Abo-Kalender hinzufügen:", url);
+    toast.success("Abo-Link bereit");
+  };
 
   const year = cursor.getFullYear();
   const month = cursor.getMonth();
@@ -59,7 +63,10 @@ export default function CalendarPage() {
     <div className="space-y-6 animate-fade-up">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="font-heading text-3xl font-bold tracking-tight text-slate-50">Kalender</h1>
-        <button data-testid="new-event-button" onClick={() => { setSelected(isoDate(new Date())); setModal(true); }} className="rounded-xl px-4 py-2 text-sm font-medium bg-amber-500 text-black flex items-center gap-2"><Plus className="h-4 w-4" /> Termin</button>
+        <div className="flex items-center gap-2">
+          <button data-testid="subscribe-calendar-button" onClick={subscribe} className="rounded-xl px-3 py-2 text-sm font-medium bg-white/5 border border-white/10 hover:bg-white/10 flex items-center gap-2"><CalendarPlus className="h-4 w-4" /> Abonnieren</button>
+          <button data-testid="new-event-button" onClick={() => { setSelected(isoDate(new Date())); setModal(true); }} className="rounded-xl px-4 py-2 text-sm font-medium bg-amber-500 text-black flex items-center gap-2"><Plus className="h-4 w-4" /> Termin</button>
+        </div>
       </div>
 
       {/* month nav */}
@@ -106,7 +113,7 @@ export default function CalendarPage() {
               {evs.map((e) => (
                 <div key={e.id} className="flex items-center gap-3 rounded-xl bg-white/[0.03] px-3 py-2" data-testid={`event-${e.id}`}>
                   <span className="h-8 w-1 rounded-full" style={{ background: e.color }} />
-                  {e.category === "birthday" && <Cake className="h-4 w-4 text-rose-400" />}
+                  {e.category === "birthday" && <Cake className="h-4 w-4 text-slate-200" />}
                   <div className="flex-1">
                     <div className="text-sm text-slate-200">{e.title}{e.time && <span className="text-slate-500 text-xs ml-2">{e.time}</span>}</div>
                     {e.user_name && <div className="text-[11px] text-slate-500">{e.user_name}</div>}
@@ -119,28 +126,31 @@ export default function CalendarPage() {
         ))}
       </div>
 
-      {modal && <EventModal date={selected} users={users} me={user} onClose={() => setModal(false)} onSaved={() => { setModal(false); load(); }} />}
+      {modal && <EventModal date={selected} onClose={() => setModal(false)} onSaved={() => { setModal(false); load(); }} />}
     </div>
   );
 }
 
-function EventModal({ date, users, me, onClose, onSaved }) {
+function EventModal({ date, onClose, onSaved }) {
   const [title, setTitle] = useState("");
   const [d, setD] = useState(date);
   const [time, setTime] = useState("");
-  const [category, setCategory] = useState("sonstiges");
-  const [userId, setUserId] = useState(me?.id || "");
+  const [isBirthday, setIsBirthday] = useState(false);
   const [yearly, setYearly] = useState(false);
-  const [notify, setNotify] = useState("");
+  const [reminders, setReminders] = useState([]);
+
+  const addReminder = () => setReminders((r) => [...r, { value: 1, unit: "hours" }]);
+  const updReminder = (i, k, v) => setReminders((r) => r.map((x, idx) => (idx === i ? { ...x, [k]: v } : x)));
+  const delReminder = (i) => setReminders((r) => r.filter((_, idx) => idx !== i));
 
   const save = async () => {
     if (!title.trim()) return toast.error("Titel fehlt");
     try {
       await api.post("/events", {
-        title, date: d, time, category,
-        user_id: category === "birthday" ? null : userId,
-        yearly_repeat: category === "birthday" ? true : yearly,
-        notify_hours: notify === "" ? null : Number(notify),
+        title, date: d, time,
+        category: isBirthday ? "birthday" : "termin",
+        yearly_repeat: isBirthday ? true : yearly,
+        reminders: reminders.map((r) => ({ value: Number(r.value) || 0, unit: r.unit })),
       });
       toast.success("Termin erstellt");
       onSaved();
@@ -149,7 +159,7 @@ function EventModal({ date, users, me, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-full max-w-md rounded-3xl border border-white/10 bg-card p-6 space-y-3 animate-fade-up" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-md max-h-[88vh] overflow-y-auto rounded-3xl border border-white/10 bg-card p-6 space-y-3 animate-fade-up" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 className="font-heading text-xl font-semibold">Neuer Termin</h3>
           <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10"><X className="h-5 w-5" /></button>
@@ -159,23 +169,27 @@ function EventModal({ date, users, me, onClose, onSaved }) {
           <input data-testid="event-date-input" type="date" value={d} onChange={(e) => setD(e.target.value)} className="rounded-xl bg-white/5 border border-white/10 px-3 py-3 text-sm outline-none" />
           <input data-testid="event-time-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} className="rounded-xl bg-white/5 border border-white/10 px-3 py-3 text-sm outline-none" />
         </div>
-        <select data-testid="event-category-select" value={category} onChange={(e) => setCategory(e.target.value)} className="w-full rounded-xl bg-white/5 border border-white/10 px-3 py-3 text-sm outline-none">
-          <option value="sonstiges">Sonstiges</option>
-          <option value="birthday">Geburtstag</option>
-        </select>
-        {category !== "birthday" && (
-          <select data-testid="event-user-select" value={userId} onChange={(e) => setUserId(e.target.value)} className="w-full rounded-xl bg-white/5 border border-white/10 px-3 py-3 text-sm outline-none">
-            {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.username}</option>)}
-          </select>
-        )}
-        {category !== "birthday" && (
-          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={yearly} onChange={(e) => setYearly(e.target.checked)} className="rounded" /> Jährlich wiederholen</label>
+        <label className="flex items-center gap-2 text-sm text-slate-300"><input data-testid="event-birthday-toggle" type="checkbox" checked={isBirthday} onChange={(e) => setIsBirthday(e.target.checked)} className="h-4 w-4 rounded accent-amber-500" /> Geburtstag (weiß markiert, jährlich)</label>
+        {!isBirthday && (
+          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={yearly} onChange={(e) => setYearly(e.target.checked)} className="h-4 w-4 rounded accent-amber-500" /> Jährlich wiederholen</label>
         )}
         <div>
-          <div className="text-xs uppercase tracking-wider text-slate-500 mb-1.5">Push-Erinnerung</div>
-          <select data-testid="event-notify-select" value={notify} onChange={(e) => setNotify(e.target.value)} className="w-full rounded-xl bg-white/5 border border-white/10 px-3 py-3 text-sm outline-none">
-            {NOTIFY.map((n) => <option key={n.v} value={n.v}>{n.l}</option>)}
-          </select>
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="text-xs uppercase tracking-wider text-slate-500">Erinnerungen (frei wählbar)</div>
+            <button data-testid="add-reminder-button" onClick={addReminder} className="text-xs text-amber-400 flex items-center gap-1"><Plus className="h-3.5 w-3.5" /> Erinnerung</button>
+          </div>
+          <div className="space-y-2">
+            {reminders.length === 0 && <p className="text-xs text-slate-600">Keine Erinnerungen. Beliebig viele hinzufügbar.</p>}
+            {reminders.map((r, i) => (
+              <div key={i} className="flex items-center gap-2" data-testid={`reminder-row-${i}`}>
+                <input type="number" min="0" value={r.value} onChange={(e) => updReminder(i, "value", e.target.value)} className="w-20 rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm outline-none" />
+                <select value={r.unit} onChange={(e) => updReminder(i, "unit", e.target.value)} className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm outline-none">
+                  {UNITS.map((u) => <option key={u.v} value={u.v}>{u.l} vorher</option>)}
+                </select>
+                <button onClick={() => delReminder(i)} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-rose-500/10 text-rose-400"><X className="h-4 w-4" /></button>
+              </div>
+            ))}
+          </div>
         </div>
         <button data-testid="save-event-button" onClick={save} className="w-full rounded-xl py-3 font-semibold bg-amber-500 text-black">Termin speichern</button>
       </div>

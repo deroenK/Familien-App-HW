@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   LayoutGrid, Utensils, ShoppingBag, Calendar, User, ShieldCheck,
-  Menu, X, LogOut, CheckSquare, Edit3, BookOpen, MapPin,
+  Menu, X, LogOut, CheckSquare, Edit3, BookOpen, MapPin, Home,
 } from "lucide-react";
 
 const NAV = [
@@ -40,12 +40,12 @@ export default function Layout({ children }) {
     <div className="min-h-screen bg-background">
       {/* Top bar */}
       <header className="glass sticky top-0 z-50 border-b border-white/10 px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
+        <NavLink to="/" data-testid="logo-home-link" className="flex items-center gap-2.5">
           <div className="h-9 w-9 rounded-xl grid place-items-center" style={{ background: "linear-gradient(135deg,#F59E0B,#D97706)" }}>
-            <Utensils className="h-5 w-5 text-black" />
+            <Home className="h-5 w-5 text-black" />
           </div>
           <span className="font-heading font-bold text-lg tracking-tight text-slate-50">Familien-App</span>
-        </div>
+        </NavLink>
         <div className="flex items-center gap-3">
           <div
             className="h-9 w-9 rounded-full grid place-items-center text-xs font-bold text-black overflow-hidden ring-2"

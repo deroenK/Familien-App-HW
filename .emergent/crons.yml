@@ -1,0 +1,8 @@
+crons:
+  - name: event-reminders
+    description: "Prueft alle 15 Minuten faellige Termin-Erinnerungen und sendet Push-Benachrichtigungen"
+    cron: "*/15 * * * *"
+    endpoint: "{{BASE_URL}}/api/cron/reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

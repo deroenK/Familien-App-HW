@@ -5,7 +5,7 @@ import os
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect, Response
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import logging
@@ -14,6 +14,9 @@ from typing import List, Optional, Dict, Any
 import uuid
 import json
 import base64
+import asyncio
+import hmac
+import secrets
 from datetime import datetime, timezone, timedelta, date
 import bcrypt
 import jwt
@@ -181,10 +184,9 @@ class EventBody(BaseModel):
     title: str
     date: str
     time: str = ""
-    category: str = "sonstiges"  # birthday | sonstiges
-    user_id: Optional[str] = None
+    category: str = "termin"  # termin | birthday
     yearly_repeat: bool = False
-    notify_hours: Optional[int] = None
+    reminders: List[Dict[str, Any]] = []
 
 
 class PushSubscribeBody(BaseModel):
@@ -541,12 +543,12 @@ async def list_events(user: dict = Depends(get_current_user)):
     umap = {u["id"]: u for u in users}
     for e in events:
         if e.get("category") == "birthday":
-            e["color"] = "#F43F5E"
-        elif e.get("user_id") and e["user_id"] in umap:
-            e["color"] = umap[e["user_id"]].get("color", "#6366F1")
+            e["color"] = "#FFFFFF"
         else:
-            e["color"] = "#6366F1"
-        e["user_name"] = umap.get(e.get("user_id"), {}).get("name") if e.get("user_id") else None
+            creator = umap.get(e.get("created_by")) or {}
+            e["color"] = creator.get("color", "#6366F1")
+        creator = umap.get(e.get("created_by")) or {}
+        e["user_name"] = creator.get("name") or creator.get("username")
     return events
 
 
@@ -556,10 +558,8 @@ async def create_event(body: EventBody, user: dict = Depends(get_current_user)):
     doc["id"] = str(uuid.uuid4())
     doc["created_by"] = user["id"]
     doc["created_at"] = now_iso()
-    if not doc.get("user_id") and body.category != "birthday":
-        doc["user_id"] = user["id"]
+    doc["reminders_sent"] = []
     await db.events.insert_one(dict(doc))
-    # immediate push notification about new appointment
     await _send_push("calendar", "Neuer Termin", f"{body.title} am {body.date}")
     return {k: v for k, v in doc.items() if k != "_id"}
 
@@ -682,7 +682,7 @@ async def _deliver(subs: list, title: str, body: str, url: str) -> int:
 
 
 # ------------------------------------------------------------------ data export/import/reset
-DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events", "chores", "whiteboard_strokes", "notebooks", "notebook_pages", "markers"]
+DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events", "chores", "whiteboard_strokes", "whiteboard_gallery", "notebooks", "notebook_pages", "markers"]
 
 
 @api_router.get("/admin/export")
@@ -760,6 +760,7 @@ class MarkerBody(BaseModel):
     lat: float
     lng: float
     place: str = ""
+    geojson: Optional[Dict[str, Any]] = None
 
 
 class WSManager:
@@ -805,7 +806,7 @@ async def list_markers(user: dict = Depends(get_current_user)):
 @api_router.post("/markers")
 async def add_marker(body: MarkerBody, user: dict = Depends(get_current_user)):
     doc = {"id": str(uuid.uuid4()), "lat": body.lat, "lng": body.lng, "place": body.place,
-           "user_id": user["id"], "user_name": _uname(user), "color": user.get("color", "#F59E0B"),
+           "geojson": body.geojson, "user_id": user["id"], "color": "#10B981",
            "created_at": now_iso()}
     await db.markers.insert_one(dict(doc))
     return {k: v for k, v in doc.items()}
@@ -1016,6 +1017,129 @@ async def delete_page(pid: str, user: dict = Depends(get_current_user)):
         await _assert_notebook_access(existing["notebook_id"], user)
         await db.notebook_pages.delete_one({"id": pid})
     return {"ok": True}
+
+
+# ================= Erinnerungen / iCal / Whiteboard-Galerie =================
+class GalleryBody(BaseModel):
+    image: str
+    title: str = ""
+
+
+@api_router.get("/whiteboard/gallery")
+async def gallery_list(user: dict = Depends(get_current_user)):
+    return await db.whiteboard_gallery.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@api_router.post("/whiteboard/gallery")
+async def gallery_add(body: GalleryBody, user: dict = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), "image": body.image, "title": body.title or "Whiteboard",
+           "created_by": _uname(user), "created_at": now_iso()}
+    await db.whiteboard_gallery.insert_one(dict(doc))
+    return {k: v for k, v in doc.items()}
+
+
+@api_router.delete("/whiteboard/gallery/{gid}")
+async def gallery_del(gid: str, user: dict = Depends(get_current_user)):
+    await db.whiteboard_gallery.delete_one({"id": gid})
+    return {"ok": True}
+
+
+def _event_datetime(ev):
+    d = ev.get("date") or ""
+    t = ev.get("time") or "09:00"
+    try:
+        return datetime.fromisoformat(f"{d}T{t}:00").replace(tzinfo=timezone.utc)
+    except Exception:
+        try:
+            return datetime.fromisoformat(f"{d}T09:00:00").replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+
+def _reminder_delta(r):
+    v = int(r.get("value", 0) or 0)
+    u = r.get("unit", "hours")
+    if u == "minutes":
+        return timedelta(minutes=v)
+    if u == "days":
+        return timedelta(days=v)
+    return timedelta(hours=v)
+
+
+async def _process_reminders():
+    now = datetime.now(timezone.utc)
+    events = await db.events.find({"reminders": {"$exists": True, "$ne": []}}).to_list(5000)
+    for ev in events:
+        base = _event_datetime(ev)
+        if not base:
+            continue
+        if ev.get("yearly_repeat"):
+            try:
+                base = base.replace(year=now.year)
+                if base < now - timedelta(days=1):
+                    base = base.replace(year=now.year + 1)
+            except Exception:
+                pass
+        sent = set(ev.get("reminders_sent") or [])
+        for idx, r in enumerate(ev.get("reminders") or []):
+            key = str(idx)
+            if key in sent:
+                continue
+            due = base - _reminder_delta(r)
+            if due <= now <= due + timedelta(hours=1):
+                await _send_push("calendar", f"Erinnerung: {ev.get('title', 'Termin')}", f"am {ev.get('date', '')} {ev.get('time', '')}".strip())
+                await db.events.update_one({"id": ev["id"]}, {"$addToSet": {"reminders_sent": key}})
+
+
+@api_router.post("/cron/reminders")
+async def cron_reminders(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not hmac.compare_digest(token, os.environ.get("WEBHOOK_CRON_SECRET", "")):
+        raise HTTPException(401, "Unauthorized")
+    asyncio.create_task(_process_reminders())
+    return {"ok": True}
+
+
+async def _ical_token():
+    s = await db.settings.find_one({"key": "ical_token"})
+    if s and s.get("value"):
+        return s["value"]
+    tok = secrets.token_urlsafe(24)
+    await db.settings.update_one({"key": "ical_token"}, {"$set": {"value": tok}}, upsert=True)
+    return tok
+
+
+@api_router.get("/calendar/feed")
+async def calendar_feed(user: dict = Depends(get_current_user)):
+    tok = await _ical_token()
+    return {"path": f"/api/ical/{tok}.ics"}
+
+
+@api_router.get("/ical/{token}.ics")
+async def ical_feed(token: str):
+    s = await db.settings.find_one({"key": "ical_token"})
+    if not s or s.get("value") != token:
+        raise HTTPException(404, "Not found")
+    events = await db.events.find({}).to_list(5000)
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Familien-App//DE", "CALSCALE:GREGORIAN", "X-WR-CALNAME:Familien-App"]
+    for ev in events:
+        d = (ev.get("date") or "").replace("-", "")
+        if not d:
+            continue
+        lines.append("BEGIN:VEVENT")
+        lines.append(f"UID:{ev['id']}@familien-app")
+        lines.append(f"SUMMARY:{ev.get('title', 'Termin')}")
+        if ev.get("time"):
+            lines.append(f"DTSTART:{d}T{ev['time'].replace(':', '')}00")
+        else:
+            lines.append(f"DTSTART;VALUE=DATE:{d}")
+        if ev.get("yearly_repeat"):
+            lines.append("RRULE:FREQ=YEARLY")
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return Response(content="\r\n".join(lines), media_type="text/calendar")
 
 
 app.include_router(api_router)

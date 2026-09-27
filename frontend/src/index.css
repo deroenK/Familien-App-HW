@@ -59,6 +59,16 @@ h1, h2, h3, h4, .font-heading {
   color: #fff;
 }
 
+/* Native select/option readability on dark theme */
+select option,
+select optgroup {
+  background-color: #161E2E;
+  color: #F8FAFC;
+}
+select {
+  color: #F8FAFC;
+}
+
 /* scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

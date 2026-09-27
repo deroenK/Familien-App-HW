@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import {
-  Pen, Highlighter, Eraser, Minus, Square, Circle, Undo2, Redo2, Download, Trash2,
+  Pen, Highlighter, Eraser, Minus, Square, Circle, Undo2, Redo2, Download, Trash2, Images, X,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -30,6 +30,8 @@ export default function Whiteboard() {
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState(user?.color || "#F59E0B");
   const [size, setSize] = useState(4);
+  const [showGallery, setShowGallery] = useState(false);
+  const [gallery, setGallery] = useState([]);
   const toolRef = useRef(tool); const colorRef = useRef(color); const sizeRef = useRef(size);
   useEffect(() => { toolRef.current = tool; }, [tool]);
   useEffect(() => { colorRef.current = color; }, [color]);
@@ -194,6 +196,17 @@ export default function Whiteboard() {
 
   const notify = async () => { await api.post("/whiteboard/notify"); toast.success("Benachrichtigung gesendet"); };
 
+  const saveToGallery = async () => {
+    const image = canvasRef.current.toDataURL("image/png");
+    await api.post("/whiteboard/gallery", { image, title: `Whiteboard ${new Date().toLocaleString("de-DE")}` });
+    toast.success("In Galerie gespeichert");
+  };
+  const openGallery = async () => {
+    const { data } = await api.get("/whiteboard/gallery");
+    setGallery(data); setShowGallery(true);
+  };
+  const delGallery = async (id) => { await api.delete(`/whiteboard/gallery/${id}`); setGallery((g) => g.filter((x) => x.id !== id)); };
+
   return (
     <div className="space-y-4 animate-fade-up">
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -221,6 +234,8 @@ export default function Whiteboard() {
         <button data-testid="undo-button" onClick={undo} className="h-10 w-10 grid place-items-center rounded-xl text-slate-300 hover:bg-white/10"><Undo2 className="h-5 w-5" /></button>
         <button data-testid="redo-button" onClick={redo} className="h-10 w-10 grid place-items-center rounded-xl text-slate-300 hover:bg-white/10"><Redo2 className="h-5 w-5" /></button>
         <div className="flex-1" />
+        <button data-testid="save-gallery-button" onClick={saveToGallery} className="h-10 px-3 rounded-xl text-emerald-400 hover:bg-emerald-500/10 flex items-center gap-2 text-sm"><Images className="h-4 w-4" /> Galerie speichern</button>
+        <button data-testid="open-gallery-button" onClick={openGallery} className="h-10 px-3 rounded-xl text-slate-300 hover:bg-white/10 flex items-center gap-2 text-sm"><Images className="h-4 w-4" /> Verlauf</button>
         <button data-testid="export-png-button" onClick={exportPng} className="h-10 px-3 rounded-xl text-slate-300 hover:bg-white/10 flex items-center gap-2 text-sm"><Download className="h-4 w-4" /> PNG</button>
         <button data-testid="clear-whiteboard-button" onClick={clearAll} className="h-10 px-3 rounded-xl text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 text-sm"><Trash2 className="h-4 w-4" /> Leeren</button>
       </div>
@@ -235,7 +250,30 @@ export default function Whiteboard() {
           onTouchStart={down} onTouchMove={move} onTouchEnd={up}
         />
       </div>
-      <p className="text-xs text-slate-500">Deine Stiftfarbe entspricht deiner Profilfarbe. Zeichnungen werden für alle Familienmitglieder synchronisiert.</p>
+      <p className="text-xs text-slate-500">Deine Stiftfarbe entspricht deiner Profilfarbe. Zeichnungen werden für alle Familienmitglieder in Echtzeit synchronisiert.</p>
+
+      {showGallery && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowGallery(false)}>
+          <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-3xl border border-white/10 bg-card p-6 animate-fade-up" onClick={(e) => e.stopPropagation()} data-testid="gallery-modal">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading text-xl font-semibold flex items-center gap-2"><Images className="h-5 w-5 text-emerald-400" /> Whiteboard-Verlauf</h3>
+              <button onClick={() => setShowGallery(false)} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10"><X className="h-5 w-5" /></button>
+            </div>
+            {gallery.length === 0 && <p className="text-slate-500 text-sm py-6 text-center">Noch keine gespeicherten Whiteboards.</p>}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {gallery.map((g) => (
+                <div key={g.id} className="rounded-xl border border-white/10 overflow-hidden bg-white/[0.03]" data-testid={`gallery-item-${g.id}`}>
+                  <img src={g.image} alt={g.title} className="w-full aspect-video object-cover bg-white" />
+                  <div className="p-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0"><div className="text-[11px] text-slate-400 truncate">{g.created_by}</div></div>
+                    <button onClick={() => delGallery(g.id)} className="text-slate-500 hover:text-rose-400 shrink-0"><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -34,22 +34,23 @@ export default function Postcards() {
     setMarkers(data);
   }, []);
 
-  const addMarker = useCallback(async (lat, lng, place) => {
+  const addMarker = useCallback(async (lat, lng, place, geojson) => {
     try {
-      await api.post("/markers", { lat, lng, place: place || "" });
+      await api.post("/markers", { lat, lng, place: place || "", geojson: geojson || null });
       toast.success(`Markierung gesetzt: ${place || `${lat.toFixed(3)}, ${lng.toFixed(3)}`}`);
       loadMarkers();
     } catch (e) { toast.error(apiError(e)); }
   }, [loadMarkers]);
 
   const reverseAndAdd = useCallback(async (lat, lng) => {
-    let place = "";
+    let place = ""; let geojson = null;
     try {
-      const r = await fetch(`${NOMINATIM}/reverse?format=json&lat=${lat}&lon=${lng}`, { headers: { "Accept-Language": "de" } });
+      const r = await fetch(`${NOMINATIM}/reverse?format=json&polygon_geojson=1&lat=${lat}&lon=${lng}`, { headers: { "Accept-Language": "de" } });
       const d = await r.json();
       place = d.display_name || "";
+      geojson = d.geojson || null;
     } catch {}
-    addMarker(lat, lng, place);
+    addMarker(lat, lng, place, geojson);
   }, [addMarker]);
 
   // init map once
@@ -76,8 +77,11 @@ export default function Postcards() {
     if (!layer) return;
     layer.clearLayers();
     markers.forEach((m) => {
-      L.marker([m.lat, m.lng], { icon: pinIcon(m.color) })
-        .bindPopup(`<b>${m.place || "Ort"}</b><br/><span style="color:${m.color}">● ${m.user_name}</span>`)
+      if (m.geojson) {
+        try { L.geoJSON(m.geojson, { style: { color: "#10B981", weight: 2, fillColor: "#10B981", fillOpacity: 0.2 } }).addTo(layer); } catch {}
+      }
+      L.marker([m.lat, m.lng], { icon: pinIcon("#10B981") })
+        .bindPopup(`<b>${m.place || "Ort"}</b>`)
         .addTo(layer);
     });
     if (gpsRef.current) { gpsRef.current.remove(); gpsRef.current = null; }
@@ -91,7 +95,7 @@ export default function Postcards() {
     if (query.trim().length < 3) { setResults([]); return; }
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`${NOMINATIM}/search?format=json&addressdetails=0&limit=5&q=${encodeURIComponent(query)}`, { headers: { "Accept-Language": "de" } });
+        const r = await fetch(`${NOMINATIM}/search?format=json&polygon_geojson=1&addressdetails=0&limit=5&q=${encodeURIComponent(query)}`, { headers: { "Accept-Language": "de" } });
         setResults(await r.json());
       } catch { setResults([]); }
     }, 400);
@@ -102,7 +106,7 @@ export default function Postcards() {
     const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
     mapRef.current?.setView([lat, lng], 12);
     setResults([]); setQuery("");
-    addMarker(lat, lng, r.display_name);
+    addMarker(lat, lng, r.display_name, r.geojson || null);
   };
 
   const locateMe = () => {
@@ -167,7 +171,7 @@ export default function Postcards() {
             <span className="h-8 w-1.5 rounded-full" style={{ background: m.color }} />
             <div className="flex-1 min-w-0">
               <div className="text-sm text-slate-200 truncate">{m.place || `${m.lat.toFixed(4)}, ${m.lng.toFixed(4)}`}</div>
-              <div className="text-[11px] text-slate-500">{m.user_name} · {new Date(m.created_at).toLocaleDateString("de-DE")}</div>
+              <div className="text-[11px] text-slate-500">{new Date(m.created_at).toLocaleDateString("de-DE")}</div>
             </div>
             <button onClick={() => { mapRef.current?.setView([m.lat, m.lng], 13); }} className="text-slate-400 hover:text-amber-400"><MapPin className="h-4 w-4" /></button>
             <button onClick={() => del(m.id)} className="text-slate-500 hover:text-rose-400"><Trash2 className="h-4 w-4" /></button>

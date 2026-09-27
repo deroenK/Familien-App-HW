@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Utensils, ShoppingBag, Calendar, BookOpen, Edit3, CheckSquare,
-  MapPin, User, ShieldCheck, ChevronLeft, ChevronRight,
+  MapPin, User, ShieldCheck, ChevronLeft, ChevronRight, Cake,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -10,7 +10,6 @@ import { mondayOf, defaultWeekOffset, weekDates, formatShort, isoDate } from "..
 import { WEEKDAYS } from "../lib/constants";
 
 const TILES = [
-  { id: "meal_plan", title: "Essensplan", badge: "Woche planen", icon: Utensils, to: "/essensplan", color: "#F59E0B" },
   { id: "shopping", title: "Einkaufsliste", badge: "Schnell-Tippen", icon: ShoppingBag, to: "/einkaufsliste", color: "#10B981" },
   { id: "calendar", title: "Kalender", badge: "Termine & Geburtstage", icon: Calendar, to: "/kalender", color: "#3B82F6" },
   { id: "notebook", title: "Notizbuch", badge: "Notizen & Handschrift", icon: BookOpen, to: "/notizbuch", color: "#8B5CF6" },
@@ -25,6 +24,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [weekOffset, setWeekOffset] = useState(defaultWeekOffset());
   const [entries, setEntries] = useState({});
+  const [upcoming, setUpcoming] = useState([]);
   const monday = mondayOf(weekOffset);
   const days = weekDates(monday);
 
@@ -32,6 +32,24 @@ export default function Dashboard() {
     api.get(`/mealplan?start=${isoDate(monday)}&days=7`).then(({ data }) => setEntries(data.entries));
     // eslint-disable-next-line
   }, [weekOffset]);
+
+  useEffect(() => {
+    api.get("/events").then(({ data }) => {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const end = new Date(today); end.setDate(end.getDate() + 21);
+      const list = [];
+      data.forEach((e) => {
+        const occ = new Date(e.date + "T00:00:00");
+        if (e.yearly_repeat) {
+          occ.setFullYear(today.getFullYear());
+          if (occ < today) occ.setFullYear(today.getFullYear() + 1);
+        }
+        if (occ >= today && occ <= end) list.push({ ...e, occ });
+      });
+      list.sort((a, b) => a.occ - b.occ);
+      setUpcoming(list);
+    }).catch(() => {});
+  }, []);
 
   const tiles = [...TILES];
   if (user?.role === "admin")
@@ -104,6 +122,24 @@ export default function Dashboard() {
         >
           Plan bearbeiten <ChevronRight className="h-4 w-4" />
         </button>
+      </section>
+
+      {/* Upcoming 3 weeks */}
+      <section>
+        <h2 className="font-heading text-lg font-semibold text-slate-200 mb-4 flex items-center gap-2"><Calendar className="h-5 w-5 text-blue-400" /> Nächste 3 Wochen</h2>
+        <div className="rounded-3xl border border-white/10 bg-card/50 p-4 space-y-2" data-testid="dashboard-upcoming">
+          {upcoming.length === 0 && <p className="text-slate-500 text-sm py-3 text-center">Keine Termine vorhanden</p>}
+          {upcoming.map((e) => (
+            <div key={e.id + e.occ.toISOString()} className="flex items-center gap-3 rounded-xl bg-white/[0.03] px-3 py-2">
+              <span className="h-8 w-1.5 rounded-full" style={{ background: e.color }} />
+              {e.category === "birthday" && <Cake className="h-4 w-4 text-slate-200" />}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-slate-200 truncate">{e.title}</div>
+                <div className="text-[11px] text-slate-500">{e.occ.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}{e.time ? ` · ${e.time}` : ""}{e.user_name ? ` · ${e.user_name}` : ""}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* Tiles */}
