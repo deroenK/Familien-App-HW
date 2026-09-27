@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   LayoutGrid, Utensils, ShoppingBag, Calendar, User, ShieldCheck,
-  Menu, X, LogOut,
+  Menu, X, LogOut, CheckSquare, Edit3, BookOpen,
 } from "lucide-react";
 
 const NAV = [
@@ -11,8 +11,13 @@ const NAV = [
   { to: "/essensplan", label: "Essensplan", icon: Utensils },
   { to: "/einkaufsliste", label: "Einkaufsliste", icon: ShoppingBag },
   { to: "/kalender", label: "Kalender", icon: Calendar },
+  { to: "/haushaltsplan", label: "Haushaltsplan", icon: CheckSquare },
+  { to: "/whiteboard", label: "Whiteboard", icon: Edit3 },
+  { to: "/notizbuch", label: "Notizbuch", icon: BookOpen },
   { to: "/profil", label: "Profil", icon: User },
 ];
+
+const BOTTOM = ["/", "/essensplan", "/einkaufsliste", "/kalender", "/profil"];
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -96,7 +101,7 @@ export default function Layout({ children }) {
 
       {/* Bottom nav (mobile) */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-white/10 px-2 py-2 flex justify-around items-center md:hidden">
-        {items.slice(0, 5).map((it) => {
+        {items.filter((it) => BOTTOM.includes(it.to)).map((it) => {
           const active = it.end ? location.pathname === it.to : location.pathname.startsWith(it.to);
           return (
             <NavLink

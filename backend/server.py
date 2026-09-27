@@ -750,6 +750,188 @@ async def shutdown_db_client():
     client.close()
 
 
+# ================= Haushaltsplan / Whiteboard / Notizbuch =================
+DATA_COLLECTIONS = DATA_COLLECTIONS + ["chores", "whiteboard_strokes", "notebooks", "notebook_pages"]
+
+
+def _uname(u):
+    return u.get("name") or u["username"]
+
+
+class ChoreBody(BaseModel):
+    title: str
+    period: str = "week"
+
+
+class StrokeBody(BaseModel):
+    id: str
+    stroke: Dict[str, Any]
+    color: str = "#F59E0B"
+
+
+class NotebookBody(BaseModel):
+    title: Optional[str] = None
+    icon: Optional[str] = None
+    shared: Optional[bool] = None
+
+
+class PageBody(BaseModel):
+    title: Optional[str] = None
+    content_html: Optional[str] = None
+    canvas_data: Optional[str] = None
+
+
+@api_router.get("/chores")
+async def list_chores(period: str = "week", user: dict = Depends(get_current_user)):
+    return await db.chores.find({"period": period}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+
+
+@api_router.post("/chores")
+async def add_chore(body: ChoreBody, user: dict = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), "title": body.title, "period": body.period,
+           "done": False, "done_by": None, "done_by_id": None, "done_at": None, "created_at": now_iso()}
+    await db.chores.insert_one(dict(doc))
+    return doc
+
+
+@api_router.put("/chores/{cid}/toggle")
+async def toggle_chore(cid: str, user: dict = Depends(get_current_user)):
+    c = await db.chores.find_one({"id": cid})
+    if not c:
+        raise HTTPException(404, "Nicht gefunden")
+    new_done = not c["done"]
+    upd = {"done": new_done, "done_by": _uname(user) if new_done else None,
+           "done_by_id": user["id"] if new_done else None, "done_at": now_iso() if new_done else None}
+    await db.chores.update_one({"id": cid}, {"$set": upd})
+    if new_done:
+        await _send_push("chores", "Aufgabe erledigt", f"{_uname(user)} hat \"{c['title']}\" erledigt")
+    return {"ok": True, **upd}
+
+
+@api_router.delete("/chores/{cid}")
+async def del_chore(cid: str, user: dict = Depends(get_current_user)):
+    await db.chores.delete_one({"id": cid})
+    return {"ok": True}
+
+
+@api_router.post("/chores/reset")
+async def reset_chores(period: str = "week", user: dict = Depends(get_current_user)):
+    await db.chores.update_many({"period": period},
+                                {"$set": {"done": False, "done_by": None, "done_by_id": None, "done_at": None}})
+    return {"ok": True}
+
+
+@api_router.get("/whiteboard")
+async def get_whiteboard(user: dict = Depends(get_current_user)):
+    return await db.whiteboard_strokes.find({}, {"_id": 0}).sort("created_at", 1).to_list(10000)
+
+
+@api_router.post("/whiteboard")
+async def add_stroke(body: StrokeBody, user: dict = Depends(get_current_user)):
+    doc = {"id": body.id, "stroke": body.stroke, "color": body.color,
+           "user_id": user["id"], "user_name": _uname(user), "created_at": now_iso()}
+    await db.whiteboard_strokes.update_one({"id": body.id}, {"$set": doc}, upsert=True)
+    return {"ok": True}
+
+
+@api_router.post("/whiteboard/notify")
+async def notify_whiteboard(user: dict = Depends(get_current_user)):
+    await _send_push("whiteboard", "Whiteboard", f"{_uname(user)} hat etwas auf das Whiteboard geschrieben")
+    return {"ok": True}
+
+
+@api_router.delete("/whiteboard/{sid}")
+async def del_stroke(sid: str, user: dict = Depends(get_current_user)):
+    await db.whiteboard_strokes.delete_one({"id": sid})
+    return {"ok": True}
+
+
+@api_router.delete("/whiteboard")
+async def clear_whiteboard(user: dict = Depends(get_current_user)):
+    await db.whiteboard_strokes.delete_many({})
+    return {"ok": True}
+
+
+def _nb_filter(user):
+    if user.get("role") == "admin":
+        return {}
+    return {"$or": [{"owner_id": user["id"]}, {"shared": True}]}
+
+
+@api_router.get("/notebooks")
+async def list_notebooks(user: dict = Depends(get_current_user)):
+    books = await db.notebooks.find(_nb_filter(user), {"_id": 0}).sort("created_at", 1).to_list(1000)
+    for b in books:
+        b["page_count"] = await db.notebook_pages.count_documents({"notebook_id": b["id"]})
+        b["is_owner"] = b["owner_id"] == user["id"]
+    return books
+
+
+@api_router.post("/notebooks")
+async def create_notebook(body: NotebookBody, user: dict = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), "title": body.title or "Neues Buch", "icon": body.icon or "book",
+           "owner_id": user["id"], "owner_name": _uname(user), "shared": False, "created_at": now_iso()}
+    await db.notebooks.insert_one(dict(doc))
+    return {k: v for k, v in doc.items()}
+
+
+@api_router.put("/notebooks/{nid}")
+async def update_notebook(nid: str, body: NotebookBody, user: dict = Depends(get_current_user)):
+    nb = await db.notebooks.find_one({"id": nid})
+    if not nb:
+        raise HTTPException(404, "Nicht gefunden")
+    if nb["owner_id"] != user["id"] and user.get("role") != "admin":
+        raise HTTPException(403, "Keine Berechtigung")
+    upd = {k: v for k, v in {"title": body.title, "icon": body.icon, "shared": body.shared}.items() if v is not None}
+    if upd:
+        await db.notebooks.update_one({"id": nid}, {"$set": upd})
+    return await db.notebooks.find_one({"id": nid}, {"_id": 0})
+
+
+@api_router.delete("/notebooks/{nid}")
+async def delete_notebook(nid: str, user: dict = Depends(get_current_user)):
+    nb = await db.notebooks.find_one({"id": nid})
+    if not nb:
+        return {"ok": True}
+    if nb["owner_id"] != user["id"] and user.get("role") != "admin":
+        raise HTTPException(403, "Keine Berechtigung")
+    await db.notebooks.delete_one({"id": nid})
+    await db.notebook_pages.delete_many({"notebook_id": nid})
+    return {"ok": True}
+
+
+@api_router.get("/notebooks/{nid}/pages")
+async def list_pages(nid: str, user: dict = Depends(get_current_user)):
+    return await db.notebook_pages.find({"notebook_id": nid}, {"_id": 0}).sort("order", 1).to_list(1000)
+
+
+@api_router.post("/notebooks/{nid}/pages")
+async def create_page(nid: str, body: PageBody, user: dict = Depends(get_current_user)):
+    count = await db.notebook_pages.count_documents({"notebook_id": nid})
+    doc = {"id": str(uuid.uuid4()), "notebook_id": nid, "title": body.title or f"Seite {count + 1}",
+           "content_html": body.content_html or "", "canvas_data": body.canvas_data,
+           "order": count, "created_at": now_iso(), "updated_at": now_iso()}
+    await db.notebook_pages.insert_one(dict(doc))
+    return {k: v for k, v in doc.items()}
+
+
+@api_router.put("/pages/{pid}")
+async def update_page(pid: str, body: PageBody, user: dict = Depends(get_current_user)):
+    upd = {"updated_at": now_iso()}
+    for k in ("title", "content_html", "canvas_data"):
+        v = getattr(body, k)
+        if v is not None:
+            upd[k] = v
+    await db.notebook_pages.update_one({"id": pid}, {"$set": upd})
+    return await db.notebook_pages.find_one({"id": pid}, {"_id": 0})
+
+
+@api_router.delete("/pages/{pid}")
+async def delete_page(pid: str, user: dict = Depends(get_current_user)):
+    await db.notebook_pages.delete_one({"id": pid})
+    return {"ok": True}
+
+
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
