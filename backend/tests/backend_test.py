@@ -257,19 +257,30 @@ class TestShopping:
         assert r.status_code == 200
 
 
-# ---------- events
+# ---------- events (iteration 4: color by creator, birthday white, reminders[])
 class TestEvents:
-    def test_event_crud(self, admin_token):
+    def test_event_crud_color_by_creator_and_reminders(self, admin_token):
+        # get admin profile color
+        me = requests.get(f"{API}/auth/me", headers=h(admin_token), timeout=15).json()
+        admin_color = me.get("color")
+        # create termin with multiple reminders
         r = requests.post(f"{API}/events", headers=h(admin_token),
                          json={"title": "TEST_Termin", "date": "2026-05-01", "time": "10:00",
-                               "category": "sonstiges", "notify_hours": 24}, timeout=15)
+                               "category": "termin",
+                               "reminders": [{"value": 30, "unit": "minutes"},
+                                             {"value": 2, "unit": "hours"},
+                                             {"value": 1, "unit": "days"}]}, timeout=15)
         assert r.status_code == 200, r.text
         eid = r.json()["id"]
-        # list
+        # reminders stored
+        assert r.json().get("reminders") and len(r.json()["reminders"]) == 3
+        # list -> color must be creator's profile color
         events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
         found = [e for e in events if e["id"] == eid][0]
-        assert found["color"]  # color assigned
-        # birthday event -> shared color
+        if admin_color:
+            assert found["color"] == admin_color
+        assert found.get("user_name")
+        # birthday event -> white
         r = requests.post(f"{API}/events", headers=h(admin_token),
                          json={"title": "TEST_BDay", "date": "2026-06-15",
                                "category": "birthday", "yearly_repeat": True}, timeout=15)
@@ -277,16 +288,92 @@ class TestEvents:
         bid = r.json()["id"]
         events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
         bd = [e for e in events if e["id"] == bid][0]
-        assert bd["color"] == "#F43F5E"
+        assert bd["color"] == "#FFFFFF"
         # update
         r = requests.put(f"{API}/events/{eid}", headers=h(admin_token),
                         json={"title": "TEST_Termin2", "date": "2026-05-02",
-                              "category": "sonstiges"}, timeout=15)
+                              "category": "termin",
+                              "reminders": [{"value": 5, "unit": "minutes"}]}, timeout=15)
         assert r.status_code == 200
         assert r.json()["title"] == "TEST_Termin2"
         # delete
         assert requests.delete(f"{API}/events/{eid}", headers=h(admin_token), timeout=15).status_code == 200
         assert requests.delete(f"{API}/events/{bid}", headers=h(admin_token), timeout=15).status_code == 200
+
+
+# ---------- iteration 4: cron reminders + ical feed + whiteboard gallery
+CRON_SECRET = "c9f3a71e5b0d4c2a8e6f1d7b3a9c5e2f4d8b6a1c3e7f9d2b5a8c4e6f1d3b7a9c"
+
+
+class TestCronReminders:
+    def test_cron_requires_bearer(self):
+        r = requests.post(f"{API}/cron/reminders", timeout=15)
+        assert r.status_code == 401
+        r = requests.post(f"{API}/cron/reminders",
+                          headers={"Authorization": "Bearer wrong"}, timeout=15)
+        assert r.status_code == 401
+
+    def test_cron_success_with_secret(self):
+        r = requests.post(f"{API}/cron/reminders",
+                          headers={"Authorization": f"Bearer {CRON_SECRET}"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+
+
+class TestCalendarFeed:
+    def test_feed_and_ics(self, admin_token):
+        r = requests.get(f"{API}/calendar/feed", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        path = r.json()["path"]
+        assert path.startswith("/api/ical/") and path.endswith(".ics")
+        # Fetch ics (public)
+        r = requests.get(f"{BASE_URL}{path}", timeout=15)
+        assert r.status_code == 200
+        assert "text/calendar" in r.headers.get("content-type", "")
+        body = r.text
+        assert body.startswith("BEGIN:VCALENDAR")
+        assert "END:VCALENDAR" in body
+        # Wrong token -> 404
+        r = requests.get(f"{API}/ical/not-a-real-token.ics", timeout=15)
+        assert r.status_code == 404
+
+    def test_ics_contains_created_event(self, admin_token):
+        # Create event then verify VEVENT
+        r = requests.post(f"{API}/events", headers=h(admin_token),
+                         json={"title": "TEST_ICSEvent", "date": "2026-07-04", "time": "12:00",
+                               "category": "termin"}, timeout=15)
+        assert r.status_code == 200
+        eid = r.json()["id"]
+        try:
+            feed = requests.get(f"{API}/calendar/feed", headers=h(admin_token), timeout=15).json()
+            body = requests.get(f"{BASE_URL}{feed['path']}", timeout=15).text
+            assert "BEGIN:VEVENT" in body
+            assert "TEST_ICSEvent" in body
+        finally:
+            requests.delete(f"{API}/events/{eid}", headers=h(admin_token), timeout=15)
+
+
+class TestWhiteboardGallery:
+    def test_gallery_add_list_delete(self, admin_token):
+        img = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        r = requests.post(f"{API}/whiteboard/gallery", headers=h(admin_token),
+                          json={"image": img, "title": "TEST_Gal"}, timeout=15)
+        assert r.status_code == 200
+        gid = r.json()["id"]
+        assert r.json()["title"] == "TEST_Gal"
+        assert r.json().get("created_by")
+        # list
+        items = requests.get(f"{API}/whiteboard/gallery", headers=h(admin_token), timeout=15).json()
+        assert any(i["id"] == gid for i in items)
+        # delete
+        r = requests.delete(f"{API}/whiteboard/gallery/{gid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        items = requests.get(f"{API}/whiteboard/gallery", headers=h(admin_token), timeout=15).json()
+        assert not any(i["id"] == gid for i in items)
+
+    def test_gallery_requires_auth(self):
+        r = requests.get(f"{API}/whiteboard/gallery", timeout=15)
+        assert r.status_code == 401
 
 
 # ---------- holidays MV
@@ -534,14 +621,16 @@ class TestMarkers:
         assert r.status_code == 200
         mk = r.json()
         assert mk["place"] == "TEST_Schwerin"
-        assert mk["user_name"]  # creator name populated
-        assert mk["color"]      # color from profile
+        # iteration 4: postcards no longer expose creator; markers always green
+        assert "user_name" not in mk
+        assert mk["color"] == "#10B981"
         assert "id" in mk
         mid = mk["id"]
         # Mama can list it (visible to all)
         listed = requests.get(f"{API}/markers", headers=h(mama_token), timeout=15).json()
         found = [m for m in listed if m["id"] == mid]
-        assert found and found[0]["user_name"] == mk["user_name"]
+        assert found and found[0]["color"] == "#10B981"
+        assert "user_name" not in found[0]
         # Mama creates too
         r = requests.post(f"{API}/markers", headers=h(mama_token),
                          json={"lat": 52.5200, "lng": 13.4050, "place": "TEST_Berlin"}, timeout=15)

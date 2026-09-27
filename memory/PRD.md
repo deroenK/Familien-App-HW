@@ -37,6 +37,8 @@ Vollständige deutsche Familien-App (PWA) mit Anmeldung (Benutzername+Passwort, 
 - Dark Mode, Hamburger-Dropdown + Mobile Bottom-Nav, PWA installierbar
 
 ## Backlog (nicht im MVP)
+- **Iteration 4**: Haus-Logo (Klick → Dashboard); Dashboard „Nächste 3 Wochen"-Übersicht + Essensplan-Kachel entfernt; 16 Profilfarben (Weiß für Geburtstage reserviert); Kalender ohne „Sonstiges", Termine in Ersteller-Farbe, Geburtstage weiß, **mehrere frei wählbare Erinnerungen** je Termin (Cron `/api/cron/reminders` alle 15 Min); **iCal-Abo** (`/api/ical/<token>.ics`) für Apple/Google (Einweg); Whiteboard-**Galerie/Verlauf**; Postkarten grün mit Orts-**Umriss** und ohne Ersteller-Angabe; Dropdown-Lesbarkeit gefixt; **Plesk-Deployment-Doku** (`/app/DEPLOYMENT.md`) inkl. WebSocket-Proxy für Echtzeit
+- Offen: Zwei-Wege-Kalender-Sync (Google/Apple OAuth) — aktuell Einweg per iCal-Abo
 - **Postkarten-Karte** (3. Iteration): Leaflet + OpenStreetMap, Nominatim-Autocomplete-Suche, Klick→Reverse-Geocoding, GPS-Standort + „Hier markieren", Marker im Backend für alle sichtbar, Ersteller-Farbe & Name, Markierungsliste, einzeln/alle löschen
 - **Whiteboard Live** (3. Iteration): Echtzeit-Sync per WebSocket (/api/ws/whiteboard) statt Polling; POST/DELETE broadcasten add/delete/clear
 - **Notizbuch gezieltes Teilen** (3. Iteration): shared_with-Liste — Bücher mit einzelnen Mitgliedern oder ganzer Familie teilen; Teilen-Dialog; shared_with wird beim Benutzer-Löschen aufgeräumt

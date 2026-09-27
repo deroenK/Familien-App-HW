@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 4 testing verifies dropdown-readability bug fix, house logo → dashboard nav, dashboard 'Nächste 3 Wochen' upcoming section (with Essensplan tile removed from Bereiche), 16-color profile palette (no white), Calendar EventModal with no 'Sonstiges' + multiple reminders + subscribe (ical), backend calendar/feed + /ical/{token}.ics, /cron/reminders (Bearer WEBHOOK_CRON_SECRET), Whiteboard gallery add/list/delete, and Postcards green markers with no creator label + Nominatim outline polygon rendered. Backend: 37/37 pytest (updated TestEvents to iteration-4 schema — reminders[], category=termin|birthday, birthday color=#FFFFFF, color-by-creator; updated TestMarkers to expect no user_name and always #10B981; added TestCronReminders (401 no/bad bearer, 200 with WEBHOOK_CRON_SECRET), TestCalendarFeed (feed path, ics text/calendar body with BEGIN/END VCALENDAR + VEVENT for created event, 404 on unknown token), TestWhiteboardGallery (add/list/delete, requires auth)). Frontend Playwright (admin login): dashboard-upcoming rendered 'Keine Termine vorhanden' initially and 'TEST_UI_EVT' after creating an event 5 days out; a[href='/essensplan'] count=1 (only header nav; no Bereiche tile). Logo click on /kalender navigated to /. In EventModal 'Sonstiges' text absent; add-reminder-button produced reminder-row-0 and reminder-row-1; reminder <select><option> computed color=rgb(248,250,252) on bg=rgb(22,30,46) — bug FIX VERIFIED. Subscribe-calendar-button opened alert with the ics link ('Diesen Link in Apple/Google Kalender…'). Profile has 16 color-* swatches and none is #FFFFFF. Whiteboard: drew a stroke, save-gallery-button + open-gallery-button showed gallery-modal with 1 gallery-item; deleting it left 0. Postcards: after search 'Schwerin' and picking a Nominatim result, a green marker (#10B981) was rendered, the Schwerin polygon outline was visible on the map, and the markers list entry showed only place + date (no Admin/Mama name).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Calendar EventModal (dev only)", "issues": ["React hydration warning in dev bundle: injected editor <span> inside <option> from static-imported UNITS array — appears to be Emergent editor instrumentation (x-source-var UNITS at Calendar.jsx line 9). Harmless in production build but noisy in dev. No visual impact; option text is readable."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1153 lines — still exceeds the 700-line guideline; splitting into modules (events/ical, calendar_feed, whiteboard_gallery, reminders_cron, markers, notebooks) would improve maintainability.",
+    "POST /api/whiteboard/gallery accepts unbounded base64 'image' strings — consider max-size guard and (optional) storing images as separate collection docs referenced by id to avoid Mongo 16MB doc caps for large canvases.",
+    "GET /api/ical/{token}.ics is public by design (needed for external clients) but leaks all family event titles. Consider a per-user ical token or a shared secret rotation UI; current implementation stores a single global token in db.settings.ical_token — no way to rotate/revoke from UI.",
+    "_process_reminders detects 'due <= now <= due+1h' — if the cron misses a full hour (deployment restart, network outage), reminders can be missed silently. Consider a 'past-due-window' catch-up or persistent 'next_due_at' index.",
+    "EventBody accepts arbitrary reminders payload (List[Dict]); consider a Pydantic sub-model {value:int>=0, unit:Literal['minutes','hours','days']} for validation.",
+    "PUT /events/{id} does not preserve reminders_sent — an edit resets sent state indirectly (since only body.model_dump is $set, but reminders_sent is not in EventBody, so it is left intact). Good — verified in code. No action.",
+    "Postcards marker color hard-coded to #10B981 in server; consistent with spec. Frontend list correctly omits user_name (verified in Playwright — no Admin/Mama in list under map).",
+    "No auth on GET /api/ical/{token}.ics is correct for iCal subscription, but currently ANY authenticated user (or with the leaked token) sees ALL events including personal ones — no per-user filtering. Acceptable for family-shared calendar but worth documenting."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/iteration_4.json"
+  ],
+  "success_rate": {"backend": "100% (37/37)", "frontend": "100% of scripted iteration-4 checks"},
+  "test_credentials": "Admin/admin (admin), Mama/mama (user); WEBHOOK_CRON_SECRET from backend/.env used for /api/cron/reminders.",
+  "seed_data_creation": "None persisted — TEST_* events/dishes/notebooks/markers/gallery items cleaned up in tests; one Playwright event 'TEST_UI_EVT' created and deleted via UI trash button.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: python -m pytest backend/tests/backend_test.py -n 0 (37/37 green). New tests added: TestCronReminders, TestCalendarFeed, TestWhiteboardGallery. TestEvents/TestMarkers were updated to iteration-4 spec — DO NOT revert to notify_hours/sonstiges/user_name. Dropdown fix location: /app/frontend/src/index.css lines 62-70 — computed style confirmed rgb(248,250,252) on rgb(22,30,46). Ical token is a single global row in db.settings (key='ical_token'); first /calendar/feed call creates it lazily. /api/cron/reminders returns 200 immediately and processes in a background task."
+}
