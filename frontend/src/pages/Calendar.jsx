@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, Cake, CalendarPlus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, Cake, CalendarPlus, RefreshCw } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { isoDate } from "../lib/dates";
 
@@ -13,12 +13,30 @@ export default function CalendarPage() {
   const [events, setEvents] = useState([]);
   const [selected, setSelected] = useState(null);
   const [modal, setModal] = useState(false);
+  const [gConnected, setGConnected] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await api.get("/events");
     setEvents(data);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    api.get("/google/status").then(({ data }) => setGConnected(data.connected)).catch(() => {});
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("google") === "connected") {
+      window.history.replaceState({}, "", "/kalender");
+      setGConnected(true);
+      api.post("/google/sync").then(({ data }) => { toast.success(`Google verbunden – ${data.pulled} geladen, ${data.pushed} gesendet`); load(); }).catch(() => {});
+    } else if (params.get("google") === "error") {
+      window.history.replaceState({}, "", "/kalender");
+      toast.error("Google-Verbindung fehlgeschlagen");
+    }
+  }, [load]);
+
+  const googleConnect = async () => { const { data } = await api.get("/google/login"); window.location.href = data.authorization_url; };
+  const googleSync = async () => { try { const { data } = await api.post("/google/sync"); toast.success(`${data.pulled} geladen, ${data.pushed} gesendet`); load(); } catch (e) { toast.error(apiError(e)); } };
+  const googleDisconnect = async () => { await api.post("/google/disconnect"); setGConnected(false); toast.success("Google getrennt"); };
 
   const subscribe = async () => {
     const { data } = await api.get("/calendar/feed");
@@ -63,7 +81,15 @@ export default function CalendarPage() {
     <div className="space-y-6 animate-fade-up">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="font-heading text-3xl font-bold tracking-tight text-slate-50">Kalender</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {gConnected ? (
+            <>
+              <button data-testid="google-sync-button" onClick={googleSync} className="rounded-xl px-3 py-2 text-sm font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 flex items-center gap-2"><RefreshCw className="h-4 w-4" /> Google Sync</button>
+              <button data-testid="google-disconnect-button" onClick={googleDisconnect} className="rounded-xl px-3 py-2 text-sm font-medium bg-white/5 border border-white/10 hover:bg-white/10">Trennen</button>
+            </>
+          ) : (
+            <button data-testid="google-connect-button" onClick={googleConnect} className="rounded-xl px-3 py-2 text-sm font-medium bg-white/5 border border-white/10 hover:bg-white/10 flex items-center gap-2"><RefreshCw className="h-4 w-4" /> Google verbinden</button>
+          )}
           <button data-testid="subscribe-calendar-button" onClick={subscribe} className="rounded-xl px-3 py-2 text-sm font-medium bg-white/5 border border-white/10 hover:bg-white/10 flex items-center gap-2"><CalendarPlus className="h-4 w-4" /> Abonnieren</button>
           <button data-testid="new-event-button" onClick={() => { setSelected(isoDate(new Date())); setModal(true); }} className="rounded-xl px-4 py-2 text-sm font-medium bg-amber-500 text-black flex items-center gap-2"><Plus className="h-4 w-4" /> Termin</button>
         </div>

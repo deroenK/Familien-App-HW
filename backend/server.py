@@ -35,6 +35,12 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 from pywebpush import webpush, WebPushException
+import requests
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request as GoogleRequest
+from fastapi.responses import RedirectResponse
 
 # ------------------------------------------------------------------ config
 mongo_url = os.environ['MONGO_URL']
@@ -90,7 +96,7 @@ def b64url_decode(data: str) -> bytes:
 def sanitize_user(user: dict) -> dict:
     if not user:
         return user
-    u = {k: v for k, v in user.items() if k not in ("_id", "password_hash")}
+    u = {k: v for k, v in user.items() if k not in ("_id", "password_hash", "google_tokens")}
     return u
 
 
@@ -346,6 +352,7 @@ async def update_profile(body: UserUpdate, user: dict = Depends(get_current_user
     if updates:
         await db.users.update_one({"id": user["id"]}, {"$set": updates})
     fresh = await db.users.find_one({"id": user["id"]})
+    await _sync_birthday_event(fresh)
     return sanitize_user(fresh)
 
 
@@ -376,6 +383,7 @@ async def create_user(body: UserCreate, admin: dict = Depends(require_admin)):
     doc["push_prefs"] = {"calendar": True, "whiteboard": True, "chores": True}
     doc["created_at"] = now_iso()
     await db.users.insert_one(doc)
+    await _sync_birthday_event(doc)
     return sanitize_user(doc)
 
 
@@ -387,6 +395,7 @@ async def admin_update_user(user_id: str, body: UserUpdate, admin: dict = Depend
     fresh = await db.users.find_one({"id": user_id})
     if not fresh:
         raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+    await _sync_birthday_event(fresh)
     return sanitize_user(fresh)
 
 
@@ -405,6 +414,7 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
     await db.users.delete_one({"id": user_id})
     await db.webauthn_credentials.delete_many({"user_id": user_id})
     await db.notebooks.update_many({}, {"$pull": {"shared_with": user_id}})
+    await db.events.delete_many({"source": "profile_birthday", "source_user_id": user_id})
     return {"ok": True}
 
 
@@ -561,6 +571,11 @@ async def create_event(body: EventBody, user: dict = Depends(get_current_user)):
     doc["reminders_sent"] = []
     await db.events.insert_one(dict(doc))
     await _send_push("calendar", "Neuer Termin", f"{body.title} am {body.date}")
+    creator = await db.users.find_one({"id": user["id"]})
+    if creator and creator.get("google_tokens"):
+        gid = await _push_event_to_google(creator, doc)
+        if gid:
+            await db.events.update_one({"id": doc["id"]}, {"$set": {"google_id": gid}})
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
@@ -744,6 +759,9 @@ async def seed():
 @app.on_event("startup")
 async def on_startup():
     await seed()
+    for u in await db.users.find().to_list(1000):
+        await _sync_birthday_event(u)
+    asyncio.create_task(_process_reminders())
 
 
 @app.on_event("shutdown")
@@ -1044,6 +1062,24 @@ async def gallery_del(gid: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
+async def _sync_birthday_event(u):
+    uid = u["id"]
+    bday = (u.get("birthday") or "").strip()
+    if not bday:
+        await db.events.delete_many({"source": "profile_birthday", "source_user_id": uid})
+        return
+    name = u.get("name") or u.get("username")
+    doc = {"title": f"Geburtstag {name}", "date": bday, "time": "", "category": "birthday",
+           "yearly_repeat": True, "created_by": uid}
+    existing = await db.events.find_one({"source": "profile_birthday", "source_user_id": uid})
+    if existing:
+        await db.events.update_one({"id": existing["id"]}, {"$set": doc})
+    else:
+        doc.update({"id": str(uuid.uuid4()), "reminders": [], "reminders_sent": [],
+                    "source": "profile_birthday", "source_user_id": uid, "created_at": now_iso()})
+        await db.events.insert_one(dict(doc))
+
+
 def _event_datetime(ev):
     d = ev.get("date") or ""
     t = ev.get("time") or "09:00"
@@ -1086,7 +1122,7 @@ async def _process_reminders():
             if key in sent:
                 continue
             due = base - _reminder_delta(r)
-            if due <= now <= due + timedelta(hours=1):
+            if now >= due and (now - due) <= timedelta(days=7):
                 await _send_push("calendar", f"Erinnerung: {ev.get('title', 'Termin')}", f"am {ev.get('date', '')} {ev.get('time', '')}".strip())
                 await db.events.update_one({"id": ev["id"]}, {"$addToSet": {"reminders_sent": key}})
 
@@ -1140,6 +1176,157 @@ async def ical_feed(token: str):
         lines.append("END:VEVENT")
     lines.append("END:VCALENDAR")
     return Response(content="\r\n".join(lines), media_type="text/calendar")
+
+
+# ================= Google Kalender (Zwei-Wege-Sync) =================
+GOOGLE_SCOPES = ["https://www.googleapis.com/auth/calendar",
+                 "https://www.googleapis.com/auth/userinfo.email", "openid"]
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "")
+
+
+def _google_flow():
+    return Flow.from_client_config({
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    }, scopes=GOOGLE_SCOPES, redirect_uri=GOOGLE_REDIRECT_URI)
+
+
+def _google_creds(u):
+    tokens = u.get("google_tokens")
+    if not tokens:
+        return None
+    return Credentials(
+        token=tokens.get("access_token"),
+        refresh_token=tokens.get("refresh_token"),
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=GOOGLE_CLIENT_ID, client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=GOOGLE_SCOPES,
+    )
+
+
+def _event_to_google_body(ev):
+    body = {"summary": ev.get("title", "Termin")}
+    if ev.get("time"):
+        try:
+            dt = datetime.fromisoformat(f"{ev['date']}T{ev['time']}:00")
+        except Exception:
+            dt = datetime.fromisoformat(f"{ev['date']}T09:00:00")
+        body["start"] = {"dateTime": dt.isoformat(), "timeZone": "Europe/Berlin"}
+        body["end"] = {"dateTime": (dt + timedelta(hours=1)).isoformat(), "timeZone": "Europe/Berlin"}
+    else:
+        body["start"] = {"date": ev["date"]}
+        body["end"] = {"date": ev["date"]}
+    return body
+
+
+async def _push_event_to_google(u, ev):
+    creds = _google_creds(u)
+    if not creds:
+        return None
+
+    def _do():
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        return service.events().insert(calendarId="primary", body=_event_to_google_body(ev)).execute()
+    try:
+        g = await asyncio.to_thread(_do)
+        return g.get("id")
+    except Exception as e:
+        logger.error(f"google push error: {e}")
+        return None
+
+
+@api_router.get("/google/login")
+async def google_login(user: dict = Depends(get_current_user)):
+    flow = _google_flow()
+    state = jwt.encode({"sub": user["id"]}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    url, _ = flow.authorization_url(access_type="offline", prompt="consent",
+                                    include_granted_scopes="true", state=state)
+    return {"authorization_url": url}
+
+
+@api_router.get("/google/callback")
+async def google_callback(code: str = "", state: str = ""):
+    try:
+        uid = jwt.decode(state, JWT_SECRET, algorithms=[JWT_ALGORITHM])["sub"]
+    except Exception:
+        return RedirectResponse("/kalender?google=error")
+    token_resp = requests.post("https://oauth2.googleapis.com/token", data={
+        "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": GOOGLE_REDIRECT_URI, "grant_type": "authorization_code",
+    }).json()
+    if "access_token" not in token_resp:
+        return RedirectResponse("/kalender?google=error")
+    await db.users.update_one({"id": uid}, {"$set": {"google_tokens": token_resp}})
+    return RedirectResponse("/kalender?google=connected")
+
+
+@api_router.get("/google/status")
+async def google_status(user: dict = Depends(get_current_user)):
+    return {"connected": bool(user.get("google_tokens"))}
+
+
+@api_router.post("/google/disconnect")
+async def google_disconnect(user: dict = Depends(get_current_user)):
+    await db.users.update_one({"id": user["id"]}, {"$unset": {"google_tokens": ""}})
+    return {"ok": True}
+
+
+@api_router.post("/google/sync")
+async def google_sync(user: dict = Depends(get_current_user)):
+    u = await db.users.find_one({"id": user["id"]})
+    creds = _google_creds(u)
+    if not creds:
+        raise HTTPException(400, "Google nicht verbunden")
+
+    def _list_and_refresh():
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        now = datetime.now(timezone.utc).isoformat()
+        return service.events().list(calendarId="primary", timeMin=now, maxResults=250,
+                                     singleEvents=True, orderBy="startTime").execute()
+    try:
+        result = await asyncio.to_thread(_list_and_refresh)
+    except Exception as e:
+        raise HTTPException(400, f"Google-Sync fehlgeschlagen: {e}")
+    if creds.token and creds.token != (u.get("google_tokens") or {}).get("access_token"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"google_tokens.access_token": creds.token}})
+
+    pulled = 0
+    for g in result.get("items", []):
+        start = g.get("start", {})
+        date = start.get("date") or (start.get("dateTime", "")[:10])
+        if not date:
+            continue
+        time = start["dateTime"][11:16] if start.get("dateTime") else ""
+        doc = {"title": g.get("summary", "(ohne Titel)"), "date": date, "time": time,
+               "category": "termin", "yearly_repeat": False, "created_by": user["id"],
+               "source": "google", "google_id": g.get("id")}
+        existing = await db.events.find_one({"source": "google", "google_id": g.get("id")})
+        if existing:
+            await db.events.update_one({"id": existing["id"]}, {"$set": doc})
+        else:
+            doc.update({"id": str(uuid.uuid4()), "reminders": [], "reminders_sent": [], "created_at": now_iso()})
+            await db.events.insert_one(dict(doc))
+        pulled += 1
+
+    pushed = 0
+    locals_ = await db.events.find({"created_by": user["id"], "source": {"$ne": "google"},
+                                    "google_id": {"$exists": False}}).to_list(1000)
+    for ev in locals_:
+        if ev.get("source") == "profile_birthday":
+            continue
+        gid = await _push_event_to_google(u, ev)
+        if gid:
+            await db.events.update_one({"id": ev["id"]}, {"$set": {"google_id": gid}})
+            pushed += 1
+    return {"pulled": pulled, "pushed": pushed}
 
 
 app.include_router(api_router)
