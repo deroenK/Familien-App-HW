@@ -16,7 +16,7 @@ const TILES = [
   { id: "notebook", title: "Notizbuch", badge: "Notizen & Handschrift", icon: BookOpen, to: "/notizbuch", color: "#8B5CF6" },
   { id: "whiteboard", title: "Whiteboard", badge: "Zeichnen in Profilfarbe", icon: Edit3, to: "/whiteboard", color: "#06B6D4" },
   { id: "chores", title: "Haushaltsplan", badge: "Aufgaben", icon: CheckSquare, to: "/haushaltsplan", color: "#F43F5E" },
-  { id: "postcards", title: "Postkarten", badge: "Bald verfügbar", icon: MapPin, to: null, color: "#10B981" },
+  { id: "postcards", title: "Postkarten", badge: "Erinnerungen", icon: MapPin, to: "/postkarten", color: "#10B981" },
   { id: "profile", title: "Profil & Stiftfarbe", badge: "Einstellungen", icon: User, to: "/profil", color: "#F59E0B" },
 ];
 

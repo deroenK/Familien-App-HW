@@ -86,23 +86,30 @@ export default function Whiteboard() {
     return () => ro.disconnect();
   }, [fitCanvas]);
 
-  // realtime sync poll
+  // realtime sync via WebSocket
   useEffect(() => {
-    let active = true;
-    const poll = async () => {
-      if (!drawing.current) {
-        try {
-          const { data } = await api.get("/whiteboard");
-          if (active && JSON.stringify(data.map((d) => d.id)) !== JSON.stringify(strokesRef.current.map((d) => d.id))) {
-            strokesRef.current = data;
-            redraw();
+    let ws;
+    let closed = false;
+    (async () => {
+      try { const { data } = await api.get("/whiteboard"); strokesRef.current = data; redraw(); } catch {}
+      const wsUrl = `${process.env.REACT_APP_BACKEND_URL.replace(/^http/, "ws")}/api/ws/whiteboard`;
+      try {
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "add") {
+            if (!strokesRef.current.some((s) => s.id === msg.item.id)) {
+              strokesRef.current = [...strokesRef.current, msg.item]; redraw();
+            }
+          } else if (msg.type === "delete") {
+            strokesRef.current = strokesRef.current.filter((s) => s.id !== msg.id); redraw();
+          } else if (msg.type === "clear") {
+            strokesRef.current = []; redraw();
           }
-        } catch {}
-      }
-    };
-    poll();
-    const iv = setInterval(poll, 2000);
-    return () => { active = false; clearInterval(iv); };
+        };
+      } catch {}
+    })();
+    return () => { closed = true; if (ws) ws.close(); void closed; };
   }, [redraw]);
 
   const pos = (e) => {

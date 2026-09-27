@@ -13,6 +13,7 @@ import Admin from "@/pages/Admin";
 import Chores from "@/pages/Chores";
 import Whiteboard from "@/pages/Whiteboard";
 import Notebook from "@/pages/Notebook";
+import Postcards from "@/pages/Postcards";
 import { Loader2 } from "lucide-react";
 
 function Protected({ children, adminOnly }) {
@@ -37,6 +38,7 @@ function App() {
             <Route path="/haushaltsplan" element={<Protected><Chores /></Protected>} />
             <Route path="/whiteboard" element={<Protected><Whiteboard /></Protected>} />
             <Route path="/notizbuch" element={<Protected><Notebook /></Protected>} />
+            <Route path="/postkarten" element={<Protected><Postcards /></Protected>} />
             <Route path="/profil" element={<Protected><Profile /></Protected>} />
             <Route path="/admin" element={<Protected adminOnly><Admin /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />

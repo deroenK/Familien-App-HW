@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   LayoutGrid, Utensils, ShoppingBag, Calendar, User, ShieldCheck,
-  Menu, X, LogOut, CheckSquare, Edit3, BookOpen,
+  Menu, X, LogOut, CheckSquare, Edit3, BookOpen, MapPin,
 } from "lucide-react";
 
 const NAV = [
@@ -14,6 +14,7 @@ const NAV = [
   { to: "/haushaltsplan", label: "Haushaltsplan", icon: CheckSquare },
   { to: "/whiteboard", label: "Whiteboard", icon: Edit3 },
   { to: "/notizbuch", label: "Notizbuch", icon: BookOpen },
+  { to: "/postkarten", label: "Postkarten", icon: MapPin },
   { to: "/profil", label: "Profil", icon: User },
 ];
 

@@ -5,7 +5,7 @@ import os
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import logging
@@ -681,7 +681,7 @@ async def _deliver(subs: list, title: str, body: str, url: str) -> int:
 
 
 # ------------------------------------------------------------------ data export/import/reset
-DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events", "chores", "whiteboard_strokes", "notebooks", "notebook_pages"]
+DATA_COLLECTIONS = ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events", "chores", "whiteboard_strokes", "notebooks", "notebook_pages", "markers"]
 
 
 @api_router.get("/admin/export")
@@ -755,6 +755,73 @@ def _uname(u):
     return u.get("name") or u["username"]
 
 
+class MarkerBody(BaseModel):
+    lat: float
+    lng: float
+    place: str = ""
+
+
+class WSManager:
+    def __init__(self):
+        self.active: List[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+
+    async def broadcast(self, message: dict):
+        for ws in list(self.active):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                self.disconnect(ws)
+
+
+wb_manager = WSManager()
+
+
+@api_router.websocket("/ws/whiteboard")
+async def whiteboard_ws(ws: WebSocket):
+    await wb_manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        wb_manager.disconnect(ws)
+    except Exception:
+        wb_manager.disconnect(ws)
+
+
+@api_router.get("/markers")
+async def list_markers(user: dict = Depends(get_current_user)):
+    return await db.markers.find({}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+
+
+@api_router.post("/markers")
+async def add_marker(body: MarkerBody, user: dict = Depends(get_current_user)):
+    doc = {"id": str(uuid.uuid4()), "lat": body.lat, "lng": body.lng, "place": body.place,
+           "user_id": user["id"], "user_name": _uname(user), "color": user.get("color", "#F59E0B"),
+           "created_at": now_iso()}
+    await db.markers.insert_one(dict(doc))
+    return {k: v for k, v in doc.items()}
+
+
+@api_router.delete("/markers/{mid}")
+async def del_marker(mid: str, user: dict = Depends(get_current_user)):
+    await db.markers.delete_one({"id": mid})
+    return {"ok": True}
+
+
+@api_router.delete("/markers")
+async def clear_markers(user: dict = Depends(get_current_user)):
+    await db.markers.delete_many({})
+    return {"ok": True}
+
+
 class ChoreBody(BaseModel):
     title: str
     period: str = "week"
@@ -770,6 +837,7 @@ class NotebookBody(BaseModel):
     title: Optional[str] = None
     icon: Optional[str] = None
     shared: Optional[bool] = None
+    shared_with: Optional[List[str]] = None
 
 
 class PageBody(BaseModel):
@@ -828,6 +896,7 @@ async def add_stroke(body: StrokeBody, user: dict = Depends(get_current_user)):
     doc = {"id": body.id, "stroke": body.stroke, "color": body.color,
            "user_id": user["id"], "user_name": _uname(user), "created_at": now_iso()}
     await db.whiteboard_strokes.update_one({"id": body.id}, {"$set": doc}, upsert=True)
+    await wb_manager.broadcast({"type": "add", "item": {"id": body.id, "stroke": body.stroke, "color": body.color, "user_name": _uname(user)}})
     return {"ok": True}
 
 
@@ -840,26 +909,28 @@ async def notify_whiteboard(user: dict = Depends(get_current_user)):
 @api_router.delete("/whiteboard/{sid}")
 async def del_stroke(sid: str, user: dict = Depends(get_current_user)):
     await db.whiteboard_strokes.delete_one({"id": sid})
+    await wb_manager.broadcast({"type": "delete", "id": sid})
     return {"ok": True}
 
 
 @api_router.delete("/whiteboard")
 async def clear_whiteboard(user: dict = Depends(get_current_user)):
     await db.whiteboard_strokes.delete_many({})
+    await wb_manager.broadcast({"type": "clear"})
     return {"ok": True}
 
 
 def _nb_filter(user):
     if user.get("role") == "admin":
         return {}
-    return {"$or": [{"owner_id": user["id"]}, {"shared": True}]}
+    return {"$or": [{"owner_id": user["id"]}, {"shared": True}, {"shared_with": user["id"]}]}
 
 
 async def _assert_notebook_access(nid, user):
     nb = await db.notebooks.find_one({"id": nid})
     if not nb:
         raise HTTPException(404, "Nicht gefunden")
-    if user.get("role") == "admin" or nb["owner_id"] == user["id"] or nb.get("shared"):
+    if user.get("role") == "admin" or nb["owner_id"] == user["id"] or nb.get("shared") or user["id"] in (nb.get("shared_with") or []):
         return nb
     raise HTTPException(403, "Keine Berechtigung")
 
@@ -876,7 +947,7 @@ async def list_notebooks(user: dict = Depends(get_current_user)):
 @api_router.post("/notebooks")
 async def create_notebook(body: NotebookBody, user: dict = Depends(get_current_user)):
     doc = {"id": str(uuid.uuid4()), "title": body.title or "Neues Buch", "icon": body.icon or "book",
-           "owner_id": user["id"], "owner_name": _uname(user), "shared": False, "created_at": now_iso()}
+           "owner_id": user["id"], "owner_name": _uname(user), "shared": False, "shared_with": [], "created_at": now_iso()}
     await db.notebooks.insert_one(dict(doc))
     return {k: v for k, v in doc.items()}
 
@@ -888,7 +959,7 @@ async def update_notebook(nid: str, body: NotebookBody, user: dict = Depends(get
         raise HTTPException(404, "Nicht gefunden")
     if nb["owner_id"] != user["id"] and user.get("role") != "admin":
         raise HTTPException(403, "Keine Berechtigung")
-    upd = {k: v for k, v in {"title": body.title, "icon": body.icon, "shared": body.shared}.items() if v is not None}
+    upd = {k: v for k, v in {"title": body.title, "icon": body.icon, "shared": body.shared, "shared_with": body.shared_with}.items() if v is not None}
     if upd:
         await db.notebooks.update_one({"id": nid}, {"$set": upd})
     return await db.notebooks.find_one({"id": nid}, {"_id": 0})

@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import Tesseract from "tesseract.js";
 import {
   Plus, Trash2, Share2, BookOpen, Heart, Star, ChefHat, Plane, GraduationCap,
-  Bold, Italic, Underline, List, ListOrdered, Type, PenTool, ScanText, Save, ChevronLeft, Loader2,
+  Bold, Italic, Underline, List, ListOrdered, Type, PenTool, ScanText, Save, ChevronLeft, Loader2, X,
 } from "lucide-react";
 import { api, apiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -19,8 +19,10 @@ export default function Notebook() {
   const [pages, setPages] = useState([]);
   const [page, setPage] = useState(null);
 
+  const [shareBook, setShareBook] = useState(null);
+  const [members, setMembers] = useState([]);
   const loadBooks = useCallback(async () => { const { data } = await api.get("/notebooks"); setBooks(data); }, []);
-  useEffect(() => { loadBooks(); }, [loadBooks]);
+  useEffect(() => { loadBooks(); api.get("/users").then(({ data }) => setMembers(data)).catch(() => {}); }, [loadBooks]);
 
   const openBook = async (b) => {
     setBook(b); setPage(null);
@@ -35,12 +37,7 @@ export default function Notebook() {
     loadBooks();
   };
 
-  const share = async (b, e) => {
-    e.stopPropagation();
-    const { data } = await api.put(`/notebooks/${b.id}`, { shared: !b.shared });
-    toast.success(data.shared ? "Buch geteilt" : "Teilen aufgehoben");
-    loadBooks();
-  };
+  const openShare = (b, e) => { e.stopPropagation(); setShareBook(b); };
 
   const delBook = async (b, e) => {
     e.stopPropagation();
@@ -71,6 +68,7 @@ export default function Notebook() {
           <h1 className="font-heading text-3xl font-bold tracking-tight text-slate-50">Notizbuch</h1>
           <button data-testid="create-book-button" onClick={createBook} className="rounded-xl px-4 py-2 text-sm font-medium bg-amber-500 text-black flex items-center gap-2"><Plus className="h-4 w-4" /> Neues Buch</button>
         </div>
+        {shareBook && <ShareDialog book={shareBook} members={members} onClose={() => setShareBook(null)} onSaved={() => { setShareBook(null); loadBooks(); }} />}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {books.map((b) => {
             const Icon = ICONS[b.icon] || BookOpen;
@@ -80,7 +78,7 @@ export default function Notebook() {
                 <div className="font-heading font-semibold text-slate-100 truncate">{b.title}</div>
                 <div className="text-[11px] text-slate-500">{b.page_count} Seiten · {b.owner_name}</div>
                 <div className="flex items-center gap-1 mt-3">
-                  <button onClick={(e) => share(b, e)} title="Teilen" className={`h-7 px-2 rounded-lg text-[11px] flex items-center gap-1 ${b.shared ? "bg-emerald-500/20 text-emerald-300" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}><Share2 className="h-3 w-3" /> {b.shared ? "Geteilt" : "Teilen"}</button>
+                  <button data-testid={`share-book-${b.id}`} onClick={(e) => openShare(b, e)} title="Teilen" className={`h-7 px-2 rounded-lg text-[11px] flex items-center gap-1 ${(b.shared || (b.shared_with || []).length) ? "bg-emerald-500/20 text-emerald-300" : "bg-white/5 text-slate-400 hover:bg-white/10"}`}><Share2 className="h-3 w-3" /> {b.shared ? "Alle" : (b.shared_with || []).length ? `${b.shared_with.length} geteilt` : "Teilen"}</button>
                   {(b.is_owner || user?.role === "admin") && <button onClick={(e) => delBook(b, e)} className="h-7 w-7 grid place-items-center rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10"><Trash2 className="h-3.5 w-3.5" /></button>}
                 </div>
               </div>
@@ -114,6 +112,44 @@ export default function Notebook() {
       ) : (
         <PageEditor page={page} onBack={() => setPage(null)} onSaved={(pp) => { setPages((x) => x.map((y) => y.id === pp.id ? pp : y)); setPage(pp); }} />
       )}
+    </div>
+  );
+}
+
+function ShareDialog({ book, members, onClose, onSaved }) {
+  const [shared, setShared] = useState(!!book.shared);
+  const [sel, setSel] = useState(new Set(book.shared_with || []));
+  const toggle = (id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const save = async () => {
+    await api.put(`/notebooks/${book.id}`, { shared, shared_with: Array.from(sel) });
+    toast.success("Freigabe gespeichert");
+    onSaved();
+  };
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-card p-6 space-y-3 animate-fade-up" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-heading text-xl font-semibold">„{book.title}" teilen</h3>
+          <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10"><X className="h-5 w-5" /></button>
+        </div>
+        <label className="flex items-center justify-between rounded-xl bg-white/[0.03] px-4 py-2.5">
+          <span className="text-sm text-slate-300">Mit der ganzen Familie teilen</span>
+          <input data-testid="share-all-toggle" type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} className="h-5 w-5 rounded accent-amber-500" />
+        </label>
+        {!shared && (
+          <div className="space-y-1.5">
+            <div className="text-xs uppercase tracking-wider text-slate-500">Einzelne Mitglieder</div>
+            {members.filter((m) => m.id !== book.owner_id).map((m) => (
+              <label key={m.id} className="flex items-center justify-between rounded-xl bg-white/[0.03] px-4 py-2.5">
+                <span className="text-sm text-slate-300 flex items-center gap-2"><span className="h-3 w-3 rounded-full" style={{ background: m.color }} /> {m.name || m.username}</span>
+                <input data-testid={`share-member-${m.username}`} type="checkbox" checked={sel.has(m.id)} onChange={() => toggle(m.id)} className="h-5 w-5 rounded accent-amber-500" />
+              </label>
+            ))}
+            {members.filter((m) => m.id !== book.owner_id).length === 0 && <p className="text-xs text-slate-500">Keine weiteren Mitglieder vorhanden.</p>}
+          </div>
+        )}
+        <button data-testid="save-share-button" onClick={save} className="w-full rounded-xl py-3 font-semibold bg-amber-500 text-black">Freigabe speichern</button>
+      </div>
     </div>
   );
 }
