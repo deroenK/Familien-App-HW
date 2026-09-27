@@ -1,0 +1,32 @@
+{
+  "summary": "First iteration full-stack test of the German Familien-App MVP. Backend: 25/25 pytest tests pass covering auth (username-login, wrong pw German error, Bearer /auth/me), role protection (Mama -> 403 on admin endpoints), users CRUD, cannot-delete-self, profile update + role immutability, password change, dishes CRUD, mealplan GET/PUT/DELETE + to-shopping transfer, shopping quick-add/toggle/delete/clear + top products, events CRUD with color assignment + birthday shared color, MV holidays (Frauentag + Reformationstag), webauthn register/begin + availability endpoint, VAPID key + push test with no subscription, admin export/reset preserving users. Frontend: 15/15 Playwright checks pass covering wrong-password German error, admin login -> dashboard, admin tile visibility, weekly toggle, mealplan tabs & persons toggles, dish create via manager, inline meal-entry save + delete, transfer to shopping, shopping quick-add via Enter, clear-done, calendar month nav + event create with 24h push reminder, profile save with color pick, WebAuthn register button present, test-push button clickable, admin creates new user and it appears in list.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Password change endpoint does not enforce minimum length / complexity — trivial passwords accepted",
+    "Admin reset-password endpoint accepts arbitrary new password without any policy",
+    "CORS is configured with allow_credentials=True and allow_origins from env (currently '*'). Browsers reject credential-carrying requests with wildcard origins; set an explicit allowed origin list in production.",
+    "Login endpoint has no brute-force lockout / rate limiting; playbook mentions 5-fail lockout — not implemented",
+    "Push _deliver deletes subscription with s['_id'] but subs are fetched WITHOUT projection excluding _id which is fine, but same collection is queried with {'_id':0} elsewhere — mildly inconsistent. Safe here because no projection.",
+    "webauthn/authenticate/complete falls back to first credential if id lookup fails — potential silent credential mismatch",
+    "seed() does not update existing admin password when ADMIN_PASSWORD in env changes (playbook expected idempotent seed)",
+    "No forgot-password / email flow (out of MVP scope, noted)",
+    "Frontend stores JWT in localStorage — vulnerable to XSS; playbook expects httpOnly cookies. Not required by user spec but flagged.",
+    "MealPlan/Shopping/Calendar all issue full reload() after every mutation instead of local state updates — acceptable but chatty"
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/iteration_1.json"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "100% (15/15)"},
+  "test_credentials": "Admin/admin (admin), Mama/mama (user)",
+  "seed_data_creation": "None persisted — all TEST_* artifacts cleaned up after run",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suite lives at /app/backend/tests/backend_test.py; run with 'python -m pytest backend/tests/backend_test.py -n 0' (sequential is required because TestAdminData.test_reset_content_preserves_users clears mealplan/dishes/shopping/events collections and would race with other suites under the pytest.ini default of -n 2). Reuse for regressions. WebAuthn register/authenticate complete flows cannot be end-to-end tested in headless — only /begin and availability are covered. Push delivery not testable (no real VAPID client)."
+}

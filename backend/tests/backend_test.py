@@ -1,0 +1,350 @@
+"""Comprehensive backend API tests for German Familien-App."""
+import os
+import io
+import uuid
+import requests
+import pytest
+from datetime import date, timedelta
+
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://household-planner-15.preview.emergentagent.com").rstrip("/")
+API = f"{BASE_URL}/api"
+
+ADMIN = {"username": "Admin", "password": "admin"}
+MAMA = {"username": "Mama", "password": "mama"}
+
+
+# ---------- fixtures
+@pytest.fixture(scope="session")
+def admin_token():
+    r = requests.post(f"{API}/auth/login", json=ADMIN, timeout=15)
+    assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
+    return r.json()["token"]
+
+
+@pytest.fixture(scope="session")
+def mama_token():
+    r = requests.post(f"{API}/auth/login", json=MAMA, timeout=15)
+    assert r.status_code == 200, f"mama login failed: {r.status_code} {r.text}"
+    return r.json()["token"]
+
+
+def h(tok):
+    return {"Authorization": f"Bearer {tok}"}
+
+
+# ---------- auth
+class TestAuth:
+    def test_login_success_admin(self):
+        r = requests.post(f"{API}/auth/login", json=ADMIN, timeout=15)
+        assert r.status_code == 200
+        j = r.json()
+        assert "token" in j and isinstance(j["token"], str) and len(j["token"]) > 10
+        assert j["user"]["username"] == "Admin"
+        assert j["user"]["role"] == "admin"
+        assert "password_hash" not in j["user"]
+
+    def test_login_wrong_password(self):
+        r = requests.post(f"{API}/auth/login", json={"username": "Admin", "password": "wrong"}, timeout=15)
+        assert r.status_code == 401
+        assert "falsch" in r.json()["detail"].lower()
+
+    def test_login_unknown_user(self):
+        r = requests.post(f"{API}/auth/login", json={"username": "nobody", "password": "x"}, timeout=15)
+        assert r.status_code == 401
+
+    def test_me_requires_auth(self):
+        r = requests.get(f"{API}/auth/me", timeout=15)
+        assert r.status_code == 401
+
+    def test_me_with_token(self, admin_token):
+        r = requests.get(f"{API}/auth/me", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert r.json()["username"] == "Admin"
+
+
+# ---------- role protection
+class TestRoles:
+    def test_non_admin_cannot_create_user(self, mama_token):
+        r = requests.post(f"{API}/users", headers=h(mama_token),
+                          json={"username": "TEST_x", "password": "x"}, timeout=15)
+        assert r.status_code == 403
+
+    def test_non_admin_cannot_export(self, mama_token):
+        r = requests.get(f"{API}/admin/export", headers=h(mama_token), timeout=15)
+        assert r.status_code == 403
+
+    def test_non_admin_cannot_reset(self, mama_token):
+        r = requests.post(f"{API}/admin/reset", headers=h(mama_token), timeout=15)
+        assert r.status_code == 403
+
+
+# ---------- users admin CRUD
+class TestUsers:
+    def test_list_users(self, admin_token):
+        r = requests.get(f"{API}/users", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        users = r.json()
+        names = [u["username"] for u in users]
+        assert "Admin" in names and "Mama" in names
+
+    def test_create_edit_reset_delete_user(self, admin_token):
+        uname = f"TEST_user_{uuid.uuid4().hex[:6]}"
+        # create
+        r = requests.post(f"{API}/users", headers=h(admin_token),
+                          json={"username": uname, "password": "pw123", "name": "Tester",
+                                "email": "t@t.de", "role": "user"}, timeout=15)
+        assert r.status_code == 200, r.text
+        uid = r.json()["id"]
+        # duplicate username
+        r2 = requests.post(f"{API}/users", headers=h(admin_token),
+                           json={"username": uname, "password": "pw"}, timeout=15)
+        assert r2.status_code == 400
+        # verify listed
+        listed = requests.get(f"{API}/users", headers=h(admin_token), timeout=15).json()
+        assert any(u["id"] == uid for u in listed)
+        # edit
+        r = requests.put(f"{API}/users/{uid}", headers=h(admin_token),
+                        json={"name": "Tester2", "color": "#123456"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["name"] == "Tester2"
+        assert r.json()["color"] == "#123456"
+        # reset pw
+        r = requests.post(f"{API}/users/{uid}/reset-password", headers=h(admin_token),
+                         json={"new_password": "newpw"}, timeout=15)
+        assert r.status_code == 200
+        # verify new pw works
+        r = requests.post(f"{API}/auth/login", json={"username": uname, "password": "newpw"}, timeout=15)
+        assert r.status_code == 200
+        # delete
+        r = requests.delete(f"{API}/users/{uid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+
+    def test_cannot_delete_self(self, admin_token):
+        me = requests.get(f"{API}/auth/me", headers=h(admin_token), timeout=15).json()
+        r = requests.delete(f"{API}/users/{me['id']}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 400
+
+
+# ---------- profile
+class TestProfile:
+    def test_update_profile(self, mama_token):
+        r = requests.put(f"{API}/profile", headers=h(mama_token),
+                        json={"bio": "Hallo Familie", "phone": "0170"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["bio"] == "Hallo Familie"
+        # cannot change role via /profile
+        r = requests.put(f"{API}/profile", headers=h(mama_token),
+                        json={"role": "admin"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["role"] == "user"
+
+    def test_change_password_wrong_current(self, mama_token):
+        r = requests.post(f"{API}/profile/password", headers=h(mama_token),
+                         json={"current_password": "wrong", "new_password": "x"}, timeout=15)
+        assert r.status_code == 400
+
+    def test_change_password_and_revert(self, mama_token):
+        r = requests.post(f"{API}/profile/password", headers=h(mama_token),
+                         json={"current_password": "mama", "new_password": "mama2"}, timeout=15)
+        assert r.status_code == 200
+        r = requests.post(f"{API}/auth/login", json={"username": "Mama", "password": "mama2"}, timeout=15)
+        assert r.status_code == 200
+        tok = r.json()["token"]
+        # revert
+        r = requests.post(f"{API}/profile/password", headers=h(tok),
+                         json={"current_password": "mama2", "new_password": "mama"}, timeout=15)
+        assert r.status_code == 200
+
+
+# ---------- dishes
+class TestDishes:
+    def test_dish_crud(self, admin_token):
+        r = requests.post(f"{API}/dishes", headers=h(admin_token),
+                         json={"name": "TEST_Spaghetti",
+                               "ingredients": [
+                                   {"name": "Nudeln", "category": "Nudeln & Reis",
+                                    "amount1": "125g", "amount2": "250g"},
+                                   {"name": "Tomatensoße", "category": "Konserven",
+                                    "amount1": "200ml", "amount2": "400ml"}
+                               ]}, timeout=15)
+        assert r.status_code == 200
+        did = r.json()["id"]
+        # list
+        dishes = requests.get(f"{API}/dishes", headers=h(admin_token), timeout=15).json()
+        assert any(d["id"] == did for d in dishes)
+        # update
+        r = requests.put(f"{API}/dishes/{did}", headers=h(admin_token),
+                        json={"name": "TEST_Spaghetti2", "ingredients": []}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["name"] == "TEST_Spaghetti2"
+        # delete
+        r = requests.delete(f"{API}/dishes/{did}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+
+
+# ---------- meal plan
+class TestMealPlan:
+    def test_mealplan_flow(self, admin_token):
+        # create dish first
+        r = requests.post(f"{API}/dishes", headers=h(admin_token),
+                         json={"name": "TEST_Suppe",
+                               "ingredients": [
+                                   {"name": "Kartoffeln", "category": "Obst & Gemüse",
+                                    "amount1": "300g", "amount2": "600g"}
+                               ]}, timeout=15)
+        did = r.json()["id"]
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+        start = monday.isoformat()
+        # get mealplan (empty)
+        r = requests.get(f"{API}/mealplan?start={start}&days=7", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert len(r.json()["dates"]) == 7
+        # set entry
+        target_date = (monday + timedelta(days=2)).isoformat()
+        r = requests.put(f"{API}/mealplan/entry", headers=h(admin_token),
+                        json={"date": target_date, "slot": "dinner",
+                              "name": "TEST_Suppe", "dish_id": did}, timeout=15)
+        assert r.status_code == 200
+        # confirm persisted
+        r = requests.get(f"{API}/mealplan?start={start}&days=7", headers=h(admin_token), timeout=15)
+        entries = r.json()["entries"]
+        assert target_date in entries and "dinner" in entries[target_date]
+        assert entries[target_date]["dinner"]["dish_id"] == did
+
+        # transfer to shopping
+        r = requests.post(f"{API}/mealplan/to-shopping?start={start}&days=7&persons=2",
+                         headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert r.json()["added"] >= 1
+
+        # delete entry
+        r = requests.delete(f"{API}/mealplan/entry?date={target_date}&slot=dinner",
+                           headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # cleanup
+        requests.delete(f"{API}/dishes/{did}", headers=h(admin_token), timeout=15)
+
+
+# ---------- shopping
+class TestShopping:
+    def test_shopping_crud(self, admin_token):
+        # clear checked first
+        # create
+        r = requests.post(f"{API}/shopping", headers=h(admin_token),
+                         json={"name": "TEST_Brot", "category": "Backwaren"}, timeout=15)
+        assert r.status_code == 200
+        iid = r.json()["id"]
+        assert r.json()["checked"] is False
+        # list
+        items = requests.get(f"{API}/shopping", headers=h(admin_token), timeout=15).json()
+        assert any(i["id"] == iid for i in items)
+        # toggle
+        r = requests.put(f"{API}/shopping/{iid}/toggle", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200 and r.json()["checked"] is True
+        # top products
+        r = requests.get(f"{API}/products/top", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert any(p["name"] == "TEST_Brot" for p in r.json())
+        # clear checked (deletes)
+        r = requests.delete(f"{API}/shopping", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # delete: create another and delete
+        r = requests.post(f"{API}/shopping", headers=h(admin_token),
+                         json={"name": "TEST_Milch", "category": "Milchprodukte"}, timeout=15)
+        iid = r.json()["id"]
+        r = requests.delete(f"{API}/shopping/{iid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+
+
+# ---------- events
+class TestEvents:
+    def test_event_crud(self, admin_token):
+        r = requests.post(f"{API}/events", headers=h(admin_token),
+                         json={"title": "TEST_Termin", "date": "2026-05-01", "time": "10:00",
+                               "category": "sonstiges", "notify_hours": 24}, timeout=15)
+        assert r.status_code == 200, r.text
+        eid = r.json()["id"]
+        # list
+        events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
+        found = [e for e in events if e["id"] == eid][0]
+        assert found["color"]  # color assigned
+        # birthday event -> shared color
+        r = requests.post(f"{API}/events", headers=h(admin_token),
+                         json={"title": "TEST_BDay", "date": "2026-06-15",
+                               "category": "birthday", "yearly_repeat": True}, timeout=15)
+        assert r.status_code == 200
+        bid = r.json()["id"]
+        events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
+        bd = [e for e in events if e["id"] == bid][0]
+        assert bd["color"] == "#F43F5E"
+        # update
+        r = requests.put(f"{API}/events/{eid}", headers=h(admin_token),
+                        json={"title": "TEST_Termin2", "date": "2026-05-02",
+                              "category": "sonstiges"}, timeout=15)
+        assert r.status_code == 200
+        assert r.json()["title"] == "TEST_Termin2"
+        # delete
+        assert requests.delete(f"{API}/events/{eid}", headers=h(admin_token), timeout=15).status_code == 200
+        assert requests.delete(f"{API}/events/{bid}", headers=h(admin_token), timeout=15).status_code == 200
+
+
+# ---------- holidays MV
+class TestHolidays:
+    def test_mv_holidays(self, admin_token):
+        r = requests.get(f"{API}/holidays?year=2026", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        h_ = r.json()
+        # MV includes Frauentag March 8 & Reformationstag Oct 31
+        assert h_.get("2026-03-08") == "Internationaler Frauentag"
+        assert h_.get("2026-10-31") == "Reformationstag"
+        assert h_.get("2026-01-01") == "Neujahr"
+
+
+# ---------- webauthn begin (auth only)
+class TestWebAuthn:
+    def test_register_begin(self, admin_token):
+        r = requests.post(f"{API}/webauthn/register/begin", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        j = r.json()
+        assert "challenge" in j and "rp" in j
+
+    def test_available_unknown(self, admin_token):
+        r = requests.get(f"{API}/webauthn/available/nobody", timeout=15)
+        assert r.status_code == 200
+        assert r.json()["available"] is False
+
+
+# ---------- push
+class TestPush:
+    def test_vapid_public_key(self):
+        r = requests.get(f"{API}/push/vapid-public-key", timeout=15)
+        assert r.status_code == 200
+        assert r.json()["publicKey"]
+
+    def test_push_test_no_subscription(self, admin_token):
+        r = requests.post(f"{API}/push/test", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert r.json()["sent"] == 0
+
+
+# ---------- admin data export/import/reset
+class TestAdminData:
+    def test_export(self, admin_token):
+        r = requests.get(f"{API}/admin/export", headers=h(admin_token), timeout=30)
+        assert r.status_code == 200
+        j = r.json()
+        for coll in ["users", "dishes", "mealplan_entries", "shopping_items", "product_usage", "events"]:
+            assert coll in j
+        assert "exported_at" in j
+
+    def test_reset_content_preserves_users(self, admin_token):
+        # count users before
+        before = requests.get(f"{API}/users", headers=h(admin_token), timeout=15).json()
+        r = requests.post(f"{API}/admin/reset", headers=h(admin_token), timeout=30)
+        assert r.status_code == 200
+        after = requests.get(f"{API}/users", headers=h(admin_token), timeout=15).json()
+        assert len(after) == len(before)
+        # shopping should be empty
+        items = requests.get(f"{API}/shopping", headers=h(admin_token), timeout=15).json()
+        assert items == []
