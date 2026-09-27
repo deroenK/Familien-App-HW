@@ -647,6 +647,156 @@ class TestMarkers:
         assert requests.get(f"{API}/markers", headers=h(admin_token), timeout=15).json() == []
 
 
+# ---------- iteration 5: profile birthday auto-event
+class TestBirthdayAutoEvent:
+    def _find_bday(self, events, user_id, name):
+        return [e for e in events if e.get("source") == "profile_birthday"
+                and e.get("source_user_id") == user_id
+                and e.get("title") == f"Geburtstag {name}"]
+
+    def test_profile_birthday_creates_updates_and_clears(self, mama_token):
+        me = requests.get(f"{API}/auth/me", headers=h(mama_token), timeout=15).json()
+        uid = me["id"]
+        name = me.get("name") or me.get("username")
+        original_bday = me.get("birthday", "") or ""
+        try:
+            # Set birthday -> event created
+            r = requests.put(f"{API}/profile", headers=h(mama_token),
+                            json={"birthday": "1990-05-20"}, timeout=15)
+            assert r.status_code == 200
+            assert r.json()["birthday"] == "1990-05-20"
+            events = requests.get(f"{API}/events", headers=h(mama_token), timeout=15).json()
+            matches = self._find_bday(events, uid, name)
+            assert len(matches) == 1, f"expected 1 birthday event, got {len(matches)}"
+            ev = matches[0]
+            assert ev["color"] == "#FFFFFF"
+            assert ev.get("yearly_repeat") is True
+            assert ev["date"] == "1990-05-20"
+            assert ev["category"] == "birthday"
+            ev_id = ev["id"]
+
+            # Change birthday -> updates same event, no duplicate
+            r = requests.put(f"{API}/profile", headers=h(mama_token),
+                            json={"birthday": "1991-06-21"}, timeout=15)
+            assert r.status_code == 200
+            events = requests.get(f"{API}/events", headers=h(mama_token), timeout=15).json()
+            matches = self._find_bday(events, uid, name)
+            assert len(matches) == 1, "birthday updates must not duplicate"
+            assert matches[0]["id"] == ev_id
+            assert matches[0]["date"] == "1991-06-21"
+
+            # Clear birthday -> event removed
+            r = requests.put(f"{API}/profile", headers=h(mama_token),
+                            json={"birthday": ""}, timeout=15)
+            assert r.status_code == 200
+            events = requests.get(f"{API}/events", headers=h(mama_token), timeout=15).json()
+            matches = self._find_bday(events, uid, name)
+            assert len(matches) == 0, "clearing birthday must delete event"
+        finally:
+            # Ensure clean state
+            requests.put(f"{API}/profile", headers=h(mama_token),
+                        json={"birthday": original_bday}, timeout=15)
+
+    def test_admin_create_user_with_birthday_and_delete_removes_event(self, admin_token):
+        uname = f"TEST_bd_{uuid.uuid4().hex[:6]}"
+        r = requests.post(f"{API}/users", headers=h(admin_token),
+                          json={"username": uname, "password": "pw", "name": "BdayUser",
+                                "role": "user", "birthday": "1995-08-15"}, timeout=15)
+        assert r.status_code == 200, r.text
+        new_uid = r.json()["id"]
+        try:
+            events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
+            matches = [e for e in events if e.get("source") == "profile_birthday"
+                       and e.get("source_user_id") == new_uid]
+            assert len(matches) == 1
+            assert matches[0]["title"] == "Geburtstag BdayUser"
+            assert matches[0]["color"] == "#FFFFFF"
+            assert matches[0]["date"] == "1995-08-15"
+
+            # Delete user -> birthday event removed
+            r = requests.delete(f"{API}/users/{new_uid}", headers=h(admin_token), timeout=15)
+            assert r.status_code == 200
+            new_uid = None  # avoid double delete in finally
+            events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
+            matches = [e for e in events if e.get("source") == "profile_birthday"
+                       and e.get("source_user_id") == new_uid]
+            assert len(matches) == 0
+        finally:
+            if new_uid:
+                requests.delete(f"{API}/users/{new_uid}", headers=h(admin_token), timeout=15)
+
+
+# ---------- iteration 5: reminder catch-up window (up to 7 days late)
+class TestReminderCatchUp:
+    def test_past_due_reminder_delivered_late(self, admin_token):
+        today_iso = date.today().isoformat()
+        # Event today 00:01 with a 1-minute reminder -> due 00:00 today (past)
+        r = requests.post(f"{API}/events", headers=h(admin_token),
+                         json={"title": "TEST_LateReminder", "date": today_iso, "time": "00:01",
+                               "category": "termin",
+                               "reminders": [{"value": 1, "unit": "minutes"}]}, timeout=15)
+        assert r.status_code == 200, r.text
+        eid = r.json()["id"]
+        try:
+            r = requests.post(f"{API}/cron/reminders",
+                              headers={"Authorization": f"Bearer {CRON_SECRET}"}, timeout=15)
+            assert r.status_code == 200
+            # background task -> wait
+            import time
+            deadline = time.time() + 6
+            sent = []
+            while time.time() < deadline:
+                events = requests.get(f"{API}/events", headers=h(admin_token), timeout=15).json()
+                ev = next((e for e in events if e["id"] == eid), None)
+                if ev and ev.get("reminders_sent"):
+                    sent = ev["reminders_sent"]
+                    break
+                time.sleep(0.5)
+            assert sent == ["0"], f"expected reminders_sent=['0'], got {sent}"
+        finally:
+            requests.delete(f"{API}/events/{eid}", headers=h(admin_token), timeout=15)
+
+
+# ---------- iteration 5: Google Calendar OAuth endpoints (non-interactive)
+class TestGoogleEndpoints:
+    def test_status_initially_disconnected(self, admin_token):
+        # Ensure disconnected
+        requests.post(f"{API}/google/disconnect", headers=h(admin_token), timeout=15)
+        r = requests.get(f"{API}/google/status", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert r.json() == {"connected": False}
+
+    def test_login_returns_authorization_url(self, admin_token):
+        r = requests.get(f"{API}/google/login", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        j = r.json()
+        assert "authorization_url" in j
+        url = j["authorization_url"]
+        assert "accounts.google.com" in url
+        client_id = os.environ.get("GOOGLE_CLIENT_ID",
+            "503943354251-qm0ebanku6b7e7sr53nnm2o9k687eaqj.apps.googleusercontent.com")
+        assert client_id in url
+
+    def test_sync_400_when_not_connected(self, admin_token):
+        # Ensure disconnected
+        requests.post(f"{API}/google/disconnect", headers=h(admin_token), timeout=15)
+        r = requests.post(f"{API}/google/sync", headers=h(admin_token), timeout=15)
+        assert r.status_code == 400
+
+    def test_disconnect_ok(self, admin_token):
+        r = requests.post(f"{API}/google/disconnect", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+
+    def test_login_requires_auth(self):
+        r = requests.get(f"{API}/google/login", timeout=15)
+        assert r.status_code == 401
+
+    def test_google_tokens_not_leaked_in_user(self, admin_token):
+        # sanitize_user must strip google_tokens
+        me = requests.get(f"{API}/auth/me", headers=h(admin_token), timeout=15).json()
+        assert "google_tokens" not in me
+
+
 # ---------- WebSocket whiteboard broadcast
 class TestWhiteboardWS:
     def test_ws_broadcasts_add_delete_clear(self, admin_token):

@@ -1261,6 +1261,7 @@ async def google_callback(code: str = "", state: str = ""):
         "redirect_uri": GOOGLE_REDIRECT_URI, "grant_type": "authorization_code",
     }).json()
     if "access_token" not in token_resp:
+        logger.error(f"google token exchange failed: {token_resp}")
         return RedirectResponse("/kalender?google=error")
     await db.users.update_one({"id": uid}, {"$set": {"google_tokens": token_resp}})
     return RedirectResponse("/kalender?google=connected")
