@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 3 testing focused on Postkarten (Leaflet+Nominatim), Whiteboard WebSocket sync, and Notizbuch targeted sharing (shared_with). Backend pytest: 31/31 pass (added TestMarkers, TestWhiteboardWS, TestNotebooks.test_notebook_shared_with_targeted). Markers: POST populates user_name & profile color, list visible to all users, DELETE single & DELETE all work. WebSocket /api/ws/whiteboard: WS connects, POST /api/whiteboard triggers broadcast {type:'add', item:{id,color,user_name}}, DELETE broadcasts {type:'delete',id}, DELETE all broadcasts {type:'clear'} — all three received on the socket client during a single run. Notebook targeted sharing: PUT accepts shared_with, book with Mama's id shows in Mama's list but not in a 3rd user's list; 3rd user gets 403 on POST /notebooks/{id}/pages and PUT /pages/{id}; flipping shared=true makes it visible to everyone. Frontend Playwright: /postkarten renders postcards-map (12 leaflet tiles loaded), place-search-input debounce >=3 chars produced 3 Nominatim results, selecting result panned map and added a marker (list count 1); Alle löschen cleared markers (list count 0). /whiteboard opened WebSocket wss://.../api/ws/whiteboard (twice due to StrictMode re-effect — harmless), stroke via mouse drag persisted, clear button emptied. /notizbuch: created book via create-book prompt, opened share dialog (share-all-toggle + share-member-Mama checkboxes rendered), checked Mama, save-share-button persisted shared_with, badge updated to '1 geteilt'. No page errors captured.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py now ~1030 lines mixing many concerns — still violates the >700 line split guideline; recommend splitting into modules (auth, meal, whiteboard_ws, notebooks, markers).",
+    "DATA_COLLECTIONS at line 684 includes 'notebooks', 'notebook_pages', 'markers', so admin/export & admin/reset are complete now (the iteration_2 concern was addressed).",
+    "Postcards.jsx: interval polling every 6s in addition to no WS integration — for consistency with Whiteboard iteration-3 (WebSockets), consider broadcasting marker add/delete over WS too to avoid 6s lag and Nominatim spam.",
+    "WSManager.disconnect is synchronous but called from async broadcast on send failure — safe today but list mutation during iteration mitigated only by list() copy. OK.",
+    "No auth on the WebSocket /api/ws/whiteboard — anyone with the URL can listen to family whiteboard events (contents may include user_name). Low risk since REST mutations still require JWT, but noted per iteration-3 note.",
+    "Nominatim & OSM tiles are external (rate-limits + privacy) — consider self-hosted tile proxy for production and adding a User-Agent header to Nominatim requests (currently missing).",
+    "Notebook page endpoints now correctly enforce _assert_notebook_access on POST /notebooks/{nid}/pages, PUT /pages/{pid} and DELETE /pages/{pid} — iteration-2 finding fixed.",
+    "React StrictMode causes the whiteboard WS to open twice on mount in dev; verify production builds close the stale socket to avoid duplicate broadcasts to a single client.",
+    "share-book badge counts (`shared_with.length`) can drift if a shared user is deleted; consider server-side sanitization on user delete to prune shared_with arrays."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/iteration_3.json"
+  ],
+  "success_rate": {"backend": "100% (31/31)", "frontend": "100% of scripted checks"},
+  "test_credentials": "Admin/admin (admin), Mama/mama (user); temp user TEST_third_* created & deleted per test.",
+  "seed_data_creation": "None persisted — all TEST_* markers/notebooks/users cleaned via API in test teardown and playwright cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: python -m pytest backend/tests/backend_test.py -n 0 (31/31 green). Websocket test uses websocket-client (installed globally). Nominatim/OSM are external — the frontend script survived because tiles + a Schwerin search returned quickly during this run; be lenient if they time out in future. Iteration-2 finding about /pages access control has been fixed in server.py (_assert_notebook_access now called in create/update/delete page). Highest remaining code-review items: (1) split server.py, (2) no auth on WS whiteboard socket, (3) missing User-Agent to Nominatim."
+}

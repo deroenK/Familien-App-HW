@@ -417,6 +417,54 @@ class TestWhiteboard:
 
 # ---------- notebooks
 class TestNotebooks:
+    def test_notebook_shared_with_targeted(self, admin_token, mama_token):
+        # Admin creates a 3rd user
+        uname = f"TEST_third_{uuid.uuid4().hex[:6]}"
+        r = requests.post(f"{API}/users", headers=h(admin_token),
+                          json={"username": uname, "password": "pw", "name": "Third", "role": "user"}, timeout=15)
+        assert r.status_code == 200
+        third_id = r.json()["id"]
+        third_tok = requests.post(f"{API}/auth/login", json={"username": uname, "password": "pw"}, timeout=15).json()["token"]
+        # Mama id
+        mama_me = requests.get(f"{API}/auth/me", headers=h(mama_token), timeout=15).json()
+        mama_id = mama_me["id"]
+        # Admin creates book, shares with Mama only
+        r = requests.post(f"{API}/notebooks", headers=h(admin_token),
+                         json={"title": "TEST_ShareTargeted"}, timeout=15)
+        nb = r.json()["id"]
+        r = requests.put(f"{API}/notebooks/{nb}", headers=h(admin_token),
+                         json={"shared_with": [mama_id]}, timeout=15)
+        assert r.status_code == 200
+        assert mama_id in r.json().get("shared_with", [])
+        # Mama can see it
+        mama_books = requests.get(f"{API}/notebooks", headers=h(mama_token), timeout=15).json()
+        assert any(b["id"] == nb for b in mama_books)
+        # Third user cannot see
+        third_books = requests.get(f"{API}/notebooks", headers=h(third_tok), timeout=15).json()
+        assert not any(b["id"] == nb for b in third_books)
+        # Mama can add page (access via _assert_notebook_access)
+        r = requests.post(f"{API}/notebooks/{nb}/pages", headers=h(mama_token),
+                         json={"title": "Mama page"}, timeout=15)
+        assert r.status_code == 200
+        pid = r.json()["id"]
+        # Third user cannot access pages (POST) -> 403
+        r = requests.post(f"{API}/notebooks/{nb}/pages", headers=h(third_tok),
+                         json={"title": "hax"}, timeout=15)
+        assert r.status_code == 403
+        # Third user cannot PUT page
+        r = requests.put(f"{API}/pages/{pid}", headers=h(third_tok),
+                        json={"content_html": "hax"}, timeout=15)
+        assert r.status_code == 403
+        # Now flip shared=True -> everyone
+        r = requests.put(f"{API}/notebooks/{nb}", headers=h(admin_token),
+                         json={"shared": True}, timeout=15)
+        assert r.status_code == 200
+        third_books = requests.get(f"{API}/notebooks", headers=h(third_tok), timeout=15).json()
+        assert any(b["id"] == nb for b in third_books)
+        # cleanup
+        requests.delete(f"{API}/notebooks/{nb}", headers=h(admin_token), timeout=15)
+        requests.delete(f"{API}/users/{third_id}", headers=h(admin_token), timeout=15)
+
     def test_notebook_and_pages_access_control(self, admin_token, mama_token):
         # Admin creates own book (private)
         r = requests.post(f"{API}/notebooks", headers=h(admin_token),
@@ -473,3 +521,96 @@ class TestNotebooks:
         # cleanup books
         requests.delete(f"{API}/notebooks/{admin_nb}", headers=h(admin_token), timeout=15)
         requests.delete(f"{API}/notebooks/{mama_nb}", headers=h(mama_token), timeout=15)
+
+
+# ---------- markers (Postkarten)
+class TestMarkers:
+    def test_marker_flow_shared_across_users(self, admin_token, mama_token):
+        # clear
+        requests.delete(f"{API}/markers", headers=h(admin_token), timeout=15)
+        # Admin creates marker
+        r = requests.post(f"{API}/markers", headers=h(admin_token),
+                         json={"lat": 53.6355, "lng": 11.4010, "place": "TEST_Schwerin"}, timeout=15)
+        assert r.status_code == 200
+        mk = r.json()
+        assert mk["place"] == "TEST_Schwerin"
+        assert mk["user_name"]  # creator name populated
+        assert mk["color"]      # color from profile
+        assert "id" in mk
+        mid = mk["id"]
+        # Mama can list it (visible to all)
+        listed = requests.get(f"{API}/markers", headers=h(mama_token), timeout=15).json()
+        found = [m for m in listed if m["id"] == mid]
+        assert found and found[0]["user_name"] == mk["user_name"]
+        # Mama creates too
+        r = requests.post(f"{API}/markers", headers=h(mama_token),
+                         json={"lat": 52.5200, "lng": 13.4050, "place": "TEST_Berlin"}, timeout=15)
+        mid2 = r.json()["id"]
+        # Delete single
+        r = requests.delete(f"{API}/markers/{mid}", headers=h(mama_token), timeout=15)
+        assert r.status_code == 200
+        remaining = requests.get(f"{API}/markers", headers=h(admin_token), timeout=15).json()
+        assert not any(m["id"] == mid for m in remaining)
+        assert any(m["id"] == mid2 for m in remaining)
+        # Delete all
+        r = requests.delete(f"{API}/markers", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        assert requests.get(f"{API}/markers", headers=h(admin_token), timeout=15).json() == []
+
+
+# ---------- WebSocket whiteboard broadcast
+class TestWhiteboardWS:
+    def test_ws_broadcasts_add_delete_clear(self, admin_token):
+        import websocket, threading, time, json
+        ws_url = BASE_URL.replace("http://", "ws://").replace("https://", "wss://") + "/api/ws/whiteboard"
+        received = []
+        connected = threading.Event()
+        closed = threading.Event()
+
+        def on_msg(ws, msg):
+            try:
+                received.append(json.loads(msg))
+            except Exception:
+                pass
+
+        def on_open(ws):
+            connected.set()
+
+        def on_close(ws, *a):
+            closed.set()
+
+        ws = websocket.WebSocketApp(ws_url, on_message=on_msg, on_open=on_open, on_close=on_close)
+        t = threading.Thread(target=ws.run_forever, kwargs={"skip_utf8_validation": True}, daemon=True)
+        t.start()
+        assert connected.wait(10), "WS did not connect"
+        time.sleep(0.5)
+        # POST stroke via REST -> expect 'add' broadcast
+        sid = str(uuid.uuid4())
+        r = requests.post(f"{API}/whiteboard", headers=h(admin_token),
+                         json={"id": sid, "stroke": {"tool": "pen", "points": [[0,0],[5,5]]},
+                               "color": "#F59E0B"}, timeout=15)
+        assert r.status_code == 200
+        # DELETE single
+        r = requests.delete(f"{API}/whiteboard/{sid}", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # DELETE all
+        r = requests.delete(f"{API}/whiteboard", headers=h(admin_token), timeout=15)
+        assert r.status_code == 200
+        # wait for messages
+        deadline = time.time() + 5
+        while time.time() < deadline and not (
+            any(m.get("type") == "add" for m in received)
+            and any(m.get("type") == "delete" for m in received)
+            and any(m.get("type") == "clear" for m in received)
+        ):
+            time.sleep(0.2)
+        ws.close()
+        types = [m.get("type") for m in received]
+        assert "add" in types, f"missing add in {types}"
+        assert "delete" in types, f"missing delete in {types}"
+        assert "clear" in types, f"missing clear in {types}"
+        # verify add payload structure
+        add_msg = next(m for m in received if m.get("type") == "add")
+        assert add_msg["item"]["id"] == sid
+        assert add_msg["item"]["color"] == "#F59E0B"
+        assert add_msg["item"]["user_name"]

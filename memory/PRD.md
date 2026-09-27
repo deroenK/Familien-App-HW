@@ -37,6 +37,9 @@ Vollständige deutsche Familien-App (PWA) mit Anmeldung (Benutzername+Passwort, 
 - Dark Mode, Hamburger-Dropdown + Mobile Bottom-Nav, PWA installierbar
 
 ## Backlog (nicht im MVP)
+- **Postkarten-Karte** (3. Iteration): Leaflet + OpenStreetMap, Nominatim-Autocomplete-Suche, Klick→Reverse-Geocoding, GPS-Standort + „Hier markieren", Marker im Backend für alle sichtbar, Ersteller-Farbe & Name, Markierungsliste, einzeln/alle löschen
+- **Whiteboard Live** (3. Iteration): Echtzeit-Sync per WebSocket (/api/ws/whiteboard) statt Polling; POST/DELETE broadcasten add/delete/clear
+- **Notizbuch gezieltes Teilen** (3. Iteration): shared_with-Liste — Bücher mit einzelnen Mitgliedern oder ganzer Familie teilen; Teilen-Dialog; shared_with wird beim Benutzer-Löschen aufgeräumt
 - P1: Notizbuch (Bücher/Seiten, Rich-Text, Handschrift-Canvas, Tesseract.js OCR)
 - P1: Whiteboard (Werkzeuge, Echtzeit-Sync, PNG-Export)
 - P1: Haushaltsplan (Wochen/Monat, Fortschritt, Erlediger-Name)

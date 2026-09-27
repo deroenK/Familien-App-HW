@@ -402,6 +402,7 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Eigenes Konto kann nicht gelöscht werden")
     await db.users.delete_one({"id": user_id})
     await db.webauthn_credentials.delete_many({"user_id": user_id})
+    await db.notebooks.update_many({}, {"$pull": {"shared_with": user_id}})
     return {"ok": True}
 
 
